@@ -1,0 +1,19 @@
+rules:
+  - id: DQ-COMP-001
+    name: "Accident date required"
+    dimension: completeness
+    severity: critical
+    dataset: accidents
+    column: accident_date
+    check: not_null
+
+  - id: DQ-VAL-001
+    name: "Date in valid range"
+    dimension: validity
+    severity: critical
+    dataset: accidents
+    column: accident_date
+    check: between
+    parameters:
+      min: "2010-01-01"
+      max: "{{ today }}"
