@@ -1,0 +1,22 @@
+rules:
+  - id: DQ-COMP-001
+    name: "Accident date is required"
+    dimension: completeness
+    severity: critical
+    dataset: accidents
+    column: accident_date
+    check: not_null
+  - id: DQ-COMP-002
+    name: "Severity code is required"
+    dimension: completeness
+    severity: critical
+    dataset: accidents
+    column: severity_code
+    check: not_null
+  - id: DQ-COMP-003
+    name: "Location ID is required"
+    dimension: completeness
+    severity: warning
+    dataset: accidents
+    column: location_id
+    check: not_null

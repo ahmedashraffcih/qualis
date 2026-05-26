@@ -1,0 +1,8 @@
+rules:
+  - id: DQ-UNIQ-001
+    name: "Accident ID is unique"
+    dimension: uniqueness
+    severity: critical
+    dataset: accidents
+    column: id
+    check: unique
