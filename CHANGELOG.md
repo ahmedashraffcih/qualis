@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.1 (2026-05-27)
+
+- HTML scorecard report — single-file, traffic-light hero, DAMA dimension bars, drilldown table
+- `qualis report` command — generate HTML or JSON reports to file
+- PostgreSQL adapter with PG-dialect SQL templates (psycopg3, read-only transactions)
+- `run_detailed()` on CheckRunner for detailed results with individual check outcomes
+- `--fail-on-score` on report command for CI gating
+
 ## v0.1.0 (2026-05-26)
 
 Initial release.
