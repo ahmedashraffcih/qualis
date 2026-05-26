@@ -112,3 +112,125 @@ class TestCheckCommand:
             "--sample", str(EXAMPLE / "data" / "accidents.csv"),
         ])
         assert result.exit_code == 1
+
+
+class TestReportCommand:
+    def test_html_report_creates_file(self, tmp_path: Path) -> None:
+        output = tmp_path / "test-report.html"
+        result = runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--format", "html",
+            "--output", str(output),
+        ])
+        assert result.exit_code == 0
+        assert output.exists()
+
+    def test_html_report_contains_qualis_branding(self, tmp_path: Path) -> None:
+        output = tmp_path / "test-report.html"
+        runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--format", "html",
+            "--output", str(output),
+        ])
+        content = output.read_text(encoding="utf-8")
+        assert "Qualis" in content
+
+    def test_html_report_contains_data_quality(self, tmp_path: Path) -> None:
+        output = tmp_path / "test-report.html"
+        runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--format", "html",
+            "--output", str(output),
+        ])
+        content = output.read_text(encoding="utf-8")
+        assert "Data Quality" in content
+
+    def test_json_report_creates_file(self, tmp_path: Path) -> None:
+        output = tmp_path / "test-report.json"
+        result = runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--format", "json",
+            "--output", str(output),
+        ])
+        assert result.exit_code == 0
+        assert output.exists()
+
+    def test_json_report_is_valid_json(self, tmp_path: Path) -> None:
+        import json
+
+        output = tmp_path / "test-report.json"
+        runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--format", "json",
+            "--output", str(output),
+        ])
+        data = json.loads(output.read_text(encoding="utf-8"))
+        assert "aggregate_score" in data
+
+    def test_json_report_contains_dimension_scores(self, tmp_path: Path) -> None:
+        import json
+
+        output = tmp_path / "test-report.json"
+        runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--format", "json",
+            "--output", str(output),
+        ])
+        data = json.loads(output.read_text(encoding="utf-8"))
+        assert "dimension_scores" in data
+
+    def test_fail_on_score_exits_1(self, tmp_path: Path) -> None:
+        output = tmp_path / "test-report.html"
+        result = runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--format", "html",
+            "--output", str(output),
+            "--fail-on-score", "99",
+        ])
+        assert result.exit_code == 1
+
+    def test_fail_on_score_0_never_fails(self, tmp_path: Path) -> None:
+        output = tmp_path / "test-report.html"
+        result = runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--format", "html",
+            "--output", str(output),
+            "--fail-on-score", "0",
+        ])
+        assert result.exit_code == 0
+
+    def test_missing_rules_dir_exits_1(self, tmp_path: Path) -> None:
+        output = tmp_path / "r.html"
+        result = runner.invoke(app, [
+            "report",
+            "--rules", "/nonexistent/path",
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--output", str(output),
+        ])
+        assert result.exit_code == 1
+
+    def test_missing_sample_file_exits_1(self, tmp_path: Path) -> None:
+        output = tmp_path / "r.html"
+        result = runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(tmp_path / "nonexistent.csv"),
+            "--output", str(output),
+        ])
+        assert result.exit_code == 1

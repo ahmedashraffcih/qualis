@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import sys
+import webbrowser
 from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from qualis.bootstrap import create_checker
 from qualis.config.loader import load_rules_from_directory
 from qualis.config.settings import QualisSettings
 from qualis.domain.params import CustomParams
+from qualis.report.scorecard import save_html_report
 
 app = typer.Typer(
     name="qualis",
@@ -229,6 +231,120 @@ def check(
         sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
     else:
         print_score(score)
+
+    score_pct = int(score.aggregate_score * 100)
+    if fail_on_score > 0 and score_pct < fail_on_score:
+        console.print(
+            f"\n[red]Score {score_pct} is below threshold {fail_on_score} — failing.[/]"
+        )
+        raise typer.Exit(1)
+
+
+class ReportFormat(StrEnum):
+    html = "html"
+    json = "json"
+
+
+@app.command()
+def report(
+    rules: Path = typer.Option(  # noqa: B008
+        ...,
+        "--rules",
+        "-r",
+        help="Path to the rules directory containing YAML files.",
+        show_default=False,
+    ),
+    sample: Path = typer.Option(  # noqa: B008
+        ...,
+        "--sample",
+        "-s",
+        help="Path to a CSV or Parquet sample file to validate.",
+        show_default=False,
+    ),
+    format: ReportFormat = typer.Option(  # noqa: A002,B008
+        ReportFormat.html,
+        "--format",
+        "-f",
+        help="Output format: html or json.",
+        case_sensitive=False,
+    ),
+    output: Path = typer.Option(  # noqa: B008
+        Path("qualis-report.html"),
+        "--output",
+        "-o",
+        help="Output file path.",
+    ),
+    allow_custom: bool = typer.Option(
+        False,
+        "--allow-custom/--no-allow-custom",
+        help="Allow rules that use the 'custom' check type.",
+    ),
+    fail_on_score: int = typer.Option(
+        0,
+        "--fail-on-score",
+        help=(
+            "Exit with code 1 when the aggregate score (0-100) is below this threshold. "
+            "Default 0 means never fail on score alone."
+        ),
+        min=0,
+        max=100,
+    ),
+) -> None:
+    """Generate a quality report (HTML scorecard or JSON).
+
+    Runs all data quality checks and emits either a self-contained HTML
+    scorecard (default) or a JSON export.  The HTML report is opened in
+    the default browser automatically.  Exits with code 1 when the score
+    falls below --fail-on-score.
+    """
+    if not rules.is_dir():
+        console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' is not a directory.")
+        raise typer.Exit(1)
+
+    if not sample.is_file():
+        console.print(f"[red]Error:[/] Sample path '[cyan]{sample}[/]' is not a file.")
+        raise typer.Exit(1)
+
+    try:
+        loaded_rules = load_rules_from_directory(rules)
+    except ValueError as exc:
+        console.print(f"[red]Rules validation failed:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+    if not allow_custom:
+        custom_rule_ids = [r.id for r in loaded_rules if isinstance(r.params, CustomParams)]
+        if custom_rule_ids:
+            console.print(
+                "[red]Error:[/] Rules with 'custom' check type are not allowed unless "
+                "--allow-custom is set.\n"
+                f"  Affected rules: {', '.join(custom_rule_ids)}"
+            )
+            raise typer.Exit(1)
+
+    settings = QualisSettings(rules_dir=rules, allow_custom=allow_custom)
+    runner = create_checker(settings, sample_path=sample)
+
+    try:
+        score, check_results = runner.run_detailed()
+    except Exception as exc:  # pragma: no cover
+        console.print(f"[red]Check failed:[/] {exc}")
+        raise typer.Exit(1) from exc
+
+    if format == ReportFormat.html:
+        # Derive a sensible default output name if the user left it as the
+        # default but switched format to json — keep .html for html output.
+        save_html_report(score, output, check_results=check_results)
+        console.print(
+            f"\n[bold green]HTML report saved[/] → [cyan]{output}[/]"
+        )
+        webbrowser.open(output.resolve().as_uri())
+    else:
+        payload = _asdict_safe(score)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+        console.print(
+            f"\n[bold green]JSON report saved[/] → [cyan]{output}[/]"
+        )
 
     score_pct = int(score.aggregate_score * 100)
     if fail_on_score > 0 and score_pct < fail_on_score:

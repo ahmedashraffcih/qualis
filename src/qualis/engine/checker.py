@@ -7,7 +7,7 @@ from qualis.domain.rule_engine import RuleEngine
 from qualis.domain.scoring import compute_dataset_score, compute_dimension_scores
 
 if TYPE_CHECKING:
-    from qualis.domain.models import DatasetScore, Rule
+    from qualis.domain.models import CheckResult, DatasetScore, Rule
 
 
 class CheckRunner:
@@ -44,6 +44,19 @@ class CheckRunner:
 
     def run(self) -> DatasetScore:
         """Evaluate all rules and return an aggregated ``DatasetScore``."""
+        score, _ = self.run_detailed()
+        return score
+
+    def run_detailed(self) -> tuple[DatasetScore, list[CheckResult]]:
+        """Evaluate all rules and return both the score and individual results.
+
+        Returns
+        -------
+        tuple[DatasetScore, list[CheckResult]]
+            A 2-tuple of ``(DatasetScore, list[CheckResult])`` so callers that
+            need per-rule detail (e.g. the HTML report drilldown) can access it
+            without re-running the engine.
+        """
         results = self._engine.evaluate_all(self._rules)
 
         if self._redact:
@@ -62,10 +75,11 @@ class CheckRunner:
         )
 
         dim_scores = compute_dimension_scores(results, dataset)
-        return compute_dataset_score(
+        score = compute_dataset_score(
             dim_scores,
             self._weights,
             dataset,
             total_violations=total_violations,
             critical_violations=critical_violations,
         )
+        return score, results
