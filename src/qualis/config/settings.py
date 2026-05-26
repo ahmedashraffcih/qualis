@@ -11,7 +11,7 @@ class QualisSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="QUALIS_", env_file=".env")
 
     database_url: SecretStr = SecretStr("")
-    adapter: Literal["duckdb", "in_memory"] = "duckdb"
+    adapter: Literal["duckdb", "in_memory", "postgres"] = "duckdb"
     rules_dir: Path = Path("rules")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "text"] = "text"

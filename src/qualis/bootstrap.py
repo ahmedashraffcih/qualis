@@ -30,6 +30,10 @@ def create_checker(settings: QualisSettings, sample_path: Path | None = None) ->
             adapter.register_parquet(sample_path.stem, sample_path)
     elif settings.adapter == "in_memory":
         adapter = InMemoryAdapter()
+    elif settings.adapter == "postgres":
+        from qualis.adapters.postgres.adapter import PostgresAdapter
+
+        adapter = PostgresAdapter(settings.database_url.get_secret_value())
     else:
         adapter = DuckDBAdapter()
 
