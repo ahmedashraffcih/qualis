@@ -11,12 +11,12 @@ from qualis.ports.notifier import NotifierPort
 
 __all__ = [
     "DQDimension",
+    "DatabasePort",
+    "DatasetScore",
+    "NotifierPort",
+    "Rule",
     "RunStatus",
     "Severity",
-    "DatasetScore",
-    "Rule",
     "Violation",
-    "DatabasePort",
-    "NotifierPort",
     "__version__",
 ]
