@@ -8,8 +8,11 @@ from qualis.domain.params import (
     BetweenParams,
     CheckParams,
     CustomParams,
+    InSetParams,
+    NotNegativeParams,
     NotNullParams,
     RegexParams,
+    RowCountParams,
     SqlParams,
     UniqueParams,
 )
@@ -201,8 +204,8 @@ class TestCheckParamsUnion:
         p: CheckParams = CustomParams(handler="my.handler")
         assert isinstance(p, CustomParams)
 
-    def test_union_covers_all_six_types(self) -> None:
-        # All six param types can be assigned to CheckParams annotated variable
+    def test_union_covers_all_nine_types(self) -> None:
+        # All nine param types can be assigned to a CheckParams annotated variable
         params: list[CheckParams] = [
             NotNullParams(),
             UniqueParams(),
@@ -210,5 +213,47 @@ class TestCheckParamsUnion:
             RegexParams(pattern=r"\w+"),
             SqlParams(expression="col > 0"),
             CustomParams(handler="mod.fn"),
+            InSetParams(values=["A", "B"]),
+            RowCountParams(min=1, max=100),
+            NotNegativeParams(),
         ]
-        assert len(params) == 6
+        assert len(params) == 9
+
+
+class TestInSetParams:
+    def test_construction(self) -> None:
+        p = InSetParams(values=["A", "B", "C"])
+        assert p.values == ["A", "B", "C"]
+
+    def test_frozen(self) -> None:
+        p = InSetParams(values=["A"])
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            p.values = ["B"]  # type: ignore[misc]
+
+
+class TestRowCountParams:
+    def test_construction_with_both_bounds(self) -> None:
+        p = RowCountParams(min=10, max=100)
+        assert p.min == 10
+        assert p.max == 100
+
+    def test_defaults_are_none(self) -> None:
+        p = RowCountParams()
+        assert p.min is None
+        assert p.max is None
+
+    def test_min_only(self) -> None:
+        p = RowCountParams(min=5)
+        assert p.min == 5
+        assert p.max is None
+
+
+class TestNotNegativeParams:
+    def test_construction(self) -> None:
+        p = NotNegativeParams()
+        assert isinstance(p, NotNegativeParams)
+
+    def test_frozen(self) -> None:
+        p = NotNegativeParams()
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            p.x = 1  # type: ignore[attr-defined]

@@ -41,6 +41,26 @@ REGEX_SQL = (
     "FROM {table}"
 )
 
+IN_SET_SQL = (
+    "SELECT "
+    "  COUNT(*) FILTER ("
+    '    WHERE "{column}" IS NULL '
+    '    OR CAST("{column}" AS VARCHAR) NOT IN ({value_list})'
+    "  ) AS invalid_count, "
+    "  COUNT(*) AS total_count "
+    "FROM {table}"
+)
+
+ROW_COUNT_SQL = "SELECT COUNT(*) AS row_count FROM {table}"
+
+NOT_NEGATIVE_SQL = (
+    "SELECT "
+    '  COUNT(*) FILTER (WHERE "{column}" IS NOT NULL AND "{column}" < 0) '
+    "    AS negative_count, "
+    "  COUNT(*) AS total_count "
+    "FROM {table}"
+)
+
 TABLE_EXISTS_SQL = (
     "SELECT COUNT(*) AS cnt FROM information_schema.tables "
     "WHERE table_name = '{table}'"

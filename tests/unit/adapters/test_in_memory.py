@@ -177,5 +177,50 @@ class TestAddTable:
         assert a.table_exists("s", "t2")
 
 
+class TestCheckInSet:
+    def test_finds_invalid_code(self, adapter: InMemoryAdapter) -> None:
+        result = adapter.check_in_set("public", "users", "code", ["A001", "A002"])
+        # B-INVALID and C999 are not in the set
+        assert result["invalid_count"] == 2
+        assert result["total_count"] == 4
+
+    def test_all_valid(self, adapter: InMemoryAdapter) -> None:
+        result = adapter.check_in_set(
+            "public", "users", "code", ["A001", "A002", "B-INVALID", "C999"],
+        )
+        assert result["invalid_count"] == 0
+
+    def test_null_counts_as_invalid(self) -> None:
+        a = InMemoryAdapter()
+        a.add_table("s", "t", [{"v": "X"}, {"v": None}])
+        result = a.check_in_set("s", "t", "v", ["X"])
+        assert result["invalid_count"] == 1
+
+
+class TestCheckRowCount:
+    def test_counts_rows(self, adapter: InMemoryAdapter) -> None:
+        result = adapter.check_row_count("public", "users")
+        assert result["row_count"] == 4
+
+    def test_empty_table(self) -> None:
+        a = InMemoryAdapter()
+        a.add_table("s", "t", [])
+        result = a.check_row_count("s", "t")
+        assert result["row_count"] == 0
+
+
+class TestCheckNotNegative:
+    def test_finds_negative(self) -> None:
+        a = InMemoryAdapter()
+        a.add_table("s", "t", [{"v": 5}, {"v": -3}, {"v": 0}, {"v": None}])
+        result = a.check_not_negative("s", "t", "v")
+        assert result["negative_count"] == 1
+        assert result["total_count"] == 4
+
+    def test_all_non_negative(self, adapter: InMemoryAdapter) -> None:
+        result = adapter.check_not_negative("public", "users", "age")
+        assert result["negative_count"] == 0
+
+
 def adapter_query_all(a: InMemoryAdapter, schema: str, table: str) -> list[dict[str, Any]]:
     return a.query(f"SELECT * FROM {schema}.{table}")

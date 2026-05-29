@@ -11,8 +11,11 @@ except ImportError:  # pragma: no cover
 
 from qualis.adapters.postgres.sql_templates import (
     BETWEEN_SQL,
+    IN_SET_SQL,
+    NOT_NEGATIVE_SQL,
     NOT_NULL_SQL,
     REGEX_SQL,
+    ROW_COUNT_SQL,
     TABLE_EXISTS_SQL,
     UNIQUE_SQL,
 )
@@ -186,6 +189,45 @@ class PostgresAdapter:
                 row = cur.fetchone()
         non_matching, total = (row[0], row[1]) if row else (0, 0)
         return {"non_matching_count": int(non_matching), "total_count": int(total)}
+
+    def check_in_set(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        values: list[str],
+    ) -> dict[str, int]:
+        table_ref = _qualified(schema, table)
+        sql = IN_SET_SQL.format(column=column, table=table_ref)
+        with self._pool.connection() as conn:
+            conn.execute("SET TRANSACTION READ ONLY")
+            with conn.cursor() as cur:
+                cur.execute(sql, {"values": values})
+                row = cur.fetchone()
+        invalid, total = (row[0], row[1]) if row else (0, 0)
+        return {"invalid_count": int(invalid), "total_count": int(total)}
+
+    def check_row_count(self, schema: str, table: str) -> dict[str, int]:
+        table_ref = _qualified(schema, table)
+        sql = ROW_COUNT_SQL.format(table=table_ref)
+        with self._pool.connection() as conn:
+            conn.execute("SET TRANSACTION READ ONLY")
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
+        count = int(row[0]) if row else 0
+        return {"row_count": count}
+
+    def check_not_negative(self, schema: str, table: str, column: str) -> dict[str, int]:
+        table_ref = _qualified(schema, table)
+        sql = NOT_NEGATIVE_SQL.format(column=column, table=table_ref)
+        with self._pool.connection() as conn:
+            conn.execute("SET TRANSACTION READ ONLY")
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
+        negative, total = (row[0], row[1]) if row else (0, 0)
+        return {"negative_count": int(negative), "total_count": int(total)}
 
     # ------------------------------------------------------------------
     # Lifecycle

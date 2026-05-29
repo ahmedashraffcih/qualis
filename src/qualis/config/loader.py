@@ -16,8 +16,11 @@ from qualis.domain.params import (
     BetweenParams,
     CheckParams,
     CustomParams,
+    InSetParams,
+    NotNegativeParams,
     NotNullParams,
     RegexParams,
+    RowCountParams,
     SqlParams,
     UniqueParams,
 )
@@ -88,6 +91,18 @@ def _parse_params(check: str, parameters: dict[str, Any] | None) -> CheckParams:
         return SqlParams(expression=str(params.get("expression", "")))
     if check == CheckType.CUSTOM:
         return CustomParams(handler=str(params.get("handler", "")))
+    if check == CheckType.IN_SET:
+        raw_values = params.get("values", [])
+        return InSetParams(values=[str(v) for v in raw_values])
+    if check == CheckType.ROW_COUNT:
+        raw_min = params.get("min")
+        raw_max = params.get("max")
+        return RowCountParams(
+            min=int(raw_min) if raw_min is not None else None,
+            max=int(raw_max) if raw_max is not None else None,
+        )
+    if check == CheckType.NOT_NEGATIVE:
+        return NotNegativeParams()
     # Unreachable — check has already been validated against CheckType values
     raise ValueError(f"Unhandled check type: {check}")  # pragma: no cover
 

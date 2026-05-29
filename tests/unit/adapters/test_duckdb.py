@@ -69,3 +69,32 @@ def test_table_exists_for_registered_table(adapter: DuckDBAdapter) -> None:
 
 def test_table_exists_returns_false_for_missing_table(adapter: DuckDBAdapter) -> None:
     assert adapter.table_exists("", "nonexistent_table") is False
+
+
+def test_check_in_set_finds_invalid_severity(adapter: DuckDBAdapter) -> None:
+    result = adapter.check_in_set(
+        "", "accidents", "severity_code",
+        ["FATAL", "SERIOUS", "MINOR", "PROPERTY"],
+    )
+    # "INVALID" is not in the allowed set
+    assert result["invalid_count"] == 1
+    assert result["total_count"] == 6
+
+
+def test_check_in_set_all_valid(adapter: DuckDBAdapter) -> None:
+    result = adapter.check_in_set(
+        "", "accidents", "severity_code",
+        ["FATAL", "SERIOUS", "MINOR", "PROPERTY", "INVALID"],
+    )
+    assert result["invalid_count"] == 0
+
+
+def test_check_row_count(adapter: DuckDBAdapter) -> None:
+    result = adapter.check_row_count("", "accidents")
+    assert result["row_count"] == 6
+
+
+def test_check_not_negative_on_positive_ids(adapter: DuckDBAdapter) -> None:
+    result = adapter.check_not_negative("", "accidents", "id")
+    assert result["negative_count"] == 0
+    assert result["total_count"] == 6

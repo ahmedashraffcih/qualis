@@ -5,7 +5,15 @@ import pytest
 from qualis.adapters.in_memory.adapter import InMemoryAdapter
 from qualis.domain.enums import DQDimension, RuleType, Severity
 from qualis.domain.models import Rule
-from qualis.domain.params import BetweenParams, NotNullParams, RegexParams, UniqueParams
+from qualis.domain.params import (
+    BetweenParams,
+    InSetParams,
+    NotNegativeParams,
+    NotNullParams,
+    RegexParams,
+    RowCountParams,
+    UniqueParams,
+)
 from qualis.domain.rule_engine import RuleEngine
 
 SCHEMA = "test"
@@ -160,3 +168,60 @@ class TestEvaluateAll:
         assert not results[0].passed
         # Second rule all ids are unique → passes
         assert results[1].passed
+
+
+class TestInSet:
+    def test_finds_invalid_code(self, engine: RuleEngine) -> None:
+        rule = _make_rule(
+            check="in_set", column="code",
+            params=InSetParams(values=["AB-123", "AB-456", "CD-789"]),
+        )
+        result = engine.evaluate_rule(rule)
+        # "INVALID" is not in the set
+        assert not result.passed
+        assert result.violation_count == 1
+
+    def test_all_valid(self, engine: RuleEngine) -> None:
+        rule = _make_rule(
+            check="in_set", column="code",
+            params=InSetParams(values=["AB-123", "AB-456", "INVALID", "CD-789"]),
+        )
+        result = engine.evaluate_rule(rule)
+        assert result.passed
+
+
+class TestRowCount:
+    def test_passes_when_in_range(self, engine: RuleEngine) -> None:
+        rule = _make_rule(check="row_count", column=None, params=RowCountParams(min=1, max=10))
+        result = engine.evaluate_rule(rule)
+        assert result.passed
+
+    def test_fails_when_below_min(self, engine: RuleEngine) -> None:
+        rule = _make_rule(check="row_count", column=None, params=RowCountParams(min=100))
+        result = engine.evaluate_rule(rule)
+        assert not result.passed
+        assert result.violation_count == 1
+
+    def test_fails_when_above_max(self, engine: RuleEngine) -> None:
+        rule = _make_rule(check="row_count", column=None, params=RowCountParams(max=2))
+        result = engine.evaluate_rule(rule)
+        assert not result.passed
+
+
+class TestNotNegative:
+    def test_all_non_negative(self) -> None:
+        db = InMemoryAdapter()
+        db.add_table(SCHEMA, TABLE, [{"amount": 10}, {"amount": 0}, {"amount": 5}])
+        engine = RuleEngine(db, schema=SCHEMA)
+        rule = _make_rule(check="not_negative", column="amount", params=NotNegativeParams())
+        result = engine.evaluate_rule(rule)
+        assert result.passed
+
+    def test_finds_negative(self) -> None:
+        db = InMemoryAdapter()
+        db.add_table(SCHEMA, TABLE, [{"amount": 10}, {"amount": -5}, {"amount": 3}])
+        engine = RuleEngine(db, schema=SCHEMA)
+        rule = _make_rule(check="not_negative", column="amount", params=NotNegativeParams())
+        result = engine.evaluate_rule(rule)
+        assert not result.passed
+        assert result.violation_count == 1

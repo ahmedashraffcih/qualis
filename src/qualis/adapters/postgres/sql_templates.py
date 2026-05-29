@@ -46,6 +46,28 @@ SELECT
 FROM {table}
 """
 
+IN_SET_SQL = """
+SELECT
+    COUNT(*) FILTER (
+        WHERE "{column}" IS NULL
+        OR NOT ("{column}"::text = ANY(%(values)s))
+    ) AS invalid_count,
+    COUNT(*) AS total_count
+FROM {table}
+"""
+
+ROW_COUNT_SQL = """
+SELECT COUNT(*) AS row_count FROM {table}
+"""
+
+NOT_NEGATIVE_SQL = """
+SELECT
+    COUNT(*) FILTER (WHERE "{column}" IS NOT NULL AND "{column}" < 0)
+        AS negative_count,
+    COUNT(*) AS total_count
+FROM {table}
+"""
+
 TABLE_EXISTS_SQL = """
 SELECT COUNT(*) FROM information_schema.tables
 WHERE table_schema = %(schema)s AND table_name = %(table)s

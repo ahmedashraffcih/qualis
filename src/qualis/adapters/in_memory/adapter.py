@@ -91,6 +91,40 @@ class InMemoryAdapter:
         )
         return {"non_matching_count": non_matching, "total_count": len(rows)}
 
+    def check_in_set(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        values: list[str],
+    ) -> dict[str, int]:
+        rows = self._get_rows(schema, table)
+        allowed = set(values)
+        invalid_count = sum(
+            1
+            for r in rows
+            if r.get(column) is None or str(r.get(column)) not in allowed
+        )
+        return {"invalid_count": invalid_count, "total_count": len(rows)}
+
+    def check_row_count(self, schema: str, table: str) -> dict[str, int]:
+        rows = self._get_rows(schema, table)
+        return {"row_count": len(rows)}
+
+    def check_not_negative(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+    ) -> dict[str, int]:
+        rows = self._get_rows(schema, table)
+        negative_count = sum(
+            1
+            for r in rows
+            if r.get(column) is not None and (r[column]) < 0
+        )
+        return {"negative_count": negative_count, "total_count": len(rows)}
+
     def _extract_table_from_sql(self, sql: str) -> str | None:
         match = re.search(r"FROM\s+(\S+)", sql, re.IGNORECASE)
         return match.group(1) if match else None

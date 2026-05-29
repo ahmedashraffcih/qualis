@@ -40,3 +40,20 @@ class DatabasePort(Protocol):
         column: str,
         pattern: str,
     ) -> dict[str, int]: ...
+
+    def check_in_set(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        values: list[str],
+    ) -> dict[str, int]: ...
+
+    def check_row_count(self, schema: str, table: str) -> dict[str, int]: ...
+
+    def check_not_negative(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+    ) -> dict[str, int]: ...

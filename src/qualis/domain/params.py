@@ -34,4 +34,30 @@ class CustomParams:
     handler: str
 
 
-CheckParams = NotNullParams | UniqueParams | BetweenParams | RegexParams | SqlParams | CustomParams
+@dataclass(frozen=True)
+class InSetParams:
+    values: list[str]
+
+
+@dataclass(frozen=True)
+class RowCountParams:
+    min: int | None = None
+    max: int | None = None
+
+
+@dataclass(frozen=True)
+class NotNegativeParams:
+    pass
+
+
+CheckParams = (
+    NotNullParams
+    | UniqueParams
+    | BetweenParams
+    | RegexParams
+    | SqlParams
+    | CustomParams
+    | InSetParams
+    | RowCountParams
+    | NotNegativeParams
+)

@@ -4,7 +4,12 @@ from typing import Any
 
 from qualis.domain.enums import CheckType
 from qualis.domain.models import CheckResult, Rule, Violation
-from qualis.domain.params import BetweenParams, RegexParams
+from qualis.domain.params import (
+    BetweenParams,
+    InSetParams,
+    RegexParams,
+    RowCountParams,
+)
 
 
 class RuleEngine:
@@ -33,6 +38,12 @@ class RuleEngine:
             return self._check_between(rule)
         if rule.check == CheckType.REGEX:
             return self._check_regex(rule)
+        if rule.check == CheckType.IN_SET:
+            return self._check_in_set(rule)
+        if rule.check == CheckType.ROW_COUNT:
+            return self._check_row_count(rule)
+        if rule.check == CheckType.NOT_NEGATIVE:
+            return self._check_not_negative(rule)
         if rule.check in (CheckType.SQL, CheckType.CUSTOM):
             return self._check_stub(rule)
         # Fallback for unknown check types — return a passing stub
@@ -151,6 +162,85 @@ class RuleEngine:
             rule=rule,
             passed=non_matching == 0,
             violation_count=non_matching,
+            violations=violations,
+            rows_checked=total,
+        )
+
+    def _check_in_set(self, rule: Rule) -> CheckResult:
+        schema, table = self._dataset_parts(rule)
+        column = rule.column or ""
+        params = rule.params
+        if not isinstance(params, InSetParams):
+            return self._check_stub(rule)
+        result: dict[str, int] = self._adapter.check_in_set(
+            schema, table, column, params.values
+        )
+        invalid = result.get("invalid_count", 0)
+        total = result.get("total_count", 0)
+        violations = [
+            Violation(
+                rule=rule,
+                record_id=None,
+                actual_value=None,
+                expected=f"one of {params.values}",
+            )
+        ] * invalid
+        return CheckResult(
+            rule=rule,
+            passed=invalid == 0,
+            violation_count=invalid,
+            violations=violations,
+            rows_checked=total,
+        )
+
+    def _check_row_count(self, rule: Rule) -> CheckResult:
+        schema, table = self._dataset_parts(rule)
+        params = rule.params
+        if not isinstance(params, RowCountParams):
+            return self._check_stub(rule)
+        result: dict[str, int] = self._adapter.check_row_count(schema, table)
+        count = result.get("row_count", 0)
+        below_min = params.min is not None and count < params.min
+        above_max = params.max is not None and count > params.max
+        failed = below_min or above_max
+        violations = (
+            [
+                Violation(
+                    rule=rule,
+                    record_id=None,
+                    actual_value=count,
+                    expected=f"row count between {params.min} and {params.max}",
+                )
+            ]
+            if failed
+            else []
+        )
+        return CheckResult(
+            rule=rule,
+            passed=not failed,
+            violation_count=1 if failed else 0,
+            violations=violations,
+            rows_checked=count,
+        )
+
+    def _check_not_negative(self, rule: Rule) -> CheckResult:
+        schema, table = self._dataset_parts(rule)
+        column = rule.column or ""
+        result: dict[str, int] = self._adapter.check_not_negative(schema, table, column)
+        negative = result.get("negative_count", 0)
+        total = result.get("total_count", 0)
+        violations = [
+            Violation(
+                rule=rule,
+                record_id=None,
+                actual_value=None,
+                expected="non-negative value",
+            )
+        ] * negative
+        return CheckResult(
+            rule=rule,
+            passed=negative == 0,
+            violation_count=negative,
             violations=violations,
             rows_checked=total,
         )
