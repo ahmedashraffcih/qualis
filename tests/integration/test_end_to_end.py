@@ -234,3 +234,66 @@ class TestReportCommand:
             "--output", str(output),
         ])
         assert result.exit_code == 1
+
+
+class TestDiffCommand:
+    def _make_report(self, tmp_path: Path, name: str) -> Path:
+        """Generate a JSON report from the example data."""
+        output = tmp_path / name
+        runner.invoke(app, [
+            "report",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--format", "json",
+            "--output", str(output),
+        ])
+        return output
+
+    def test_diff_two_identical_reports(self, tmp_path: Path) -> None:
+        report = self._make_report(tmp_path, "before.json")
+        result = runner.invoke(app, ["diff", str(report), str(report)])
+        assert result.exit_code == 0
+
+    def test_diff_json_output(self, tmp_path: Path) -> None:
+        report = self._make_report(tmp_path, "before.json")
+        result = runner.invoke(app, [
+            "diff", str(report), str(report), "--output-format", "json",
+        ])
+        assert result.exit_code == 0
+        assert "aggregate_delta" in result.output
+
+    def test_diff_missing_before_exits_1(self, tmp_path: Path) -> None:
+        report = self._make_report(tmp_path, "after.json")
+        result = runner.invoke(app, [
+            "diff", str(tmp_path / "nonexistent.json"), str(report),
+        ])
+        assert result.exit_code == 1
+
+    def test_fail_on_regression_with_regressed_dimension(self, tmp_path: Path) -> None:
+        import json
+
+        # Hand-craft a "before" report with a high validity score and an
+        # "after" with a lower one to force a regression.
+        before = tmp_path / "before.json"
+        after = tmp_path / "after.json"
+        before.write_text(json.dumps({
+            "dataset": "accidents",
+            "dimension_scores": [{
+                "dimension": "validity", "dataset": "accidents",
+                "total_checks": 2, "passed": 2, "failed": 0, "score": 1.0, "weight": 1.0,
+            }],
+            "aggregate_score": 1.0, "total_violations": 0, "critical_violations": 0,
+        }))
+        after.write_text(json.dumps({
+            "dataset": "accidents",
+            "dimension_scores": [{
+                "dimension": "validity", "dataset": "accidents",
+                "total_checks": 2, "passed": 1, "failed": 1, "score": 0.5, "weight": 1.0,
+            }],
+            "aggregate_score": 0.5, "total_violations": 1, "critical_violations": 0,
+        }))
+        result = runner.invoke(app, [
+            "diff", str(before), str(after), "--fail-on-regression",
+        ])
+        assert result.exit_code == 1
+        assert "Regression detected" in result.output

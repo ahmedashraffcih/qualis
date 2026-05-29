@@ -12,7 +12,7 @@ import typer
 from rich.console import Console
 
 from qualis import __version__
-from qualis.adapters.console import print_score
+from qualis.adapters.console import print_diff, print_score
 from qualis.bootstrap import create_checker
 from qualis.config.loader import load_rules_from_directory
 from qualis.config.settings import QualisSettings
@@ -352,3 +352,62 @@ def report(
             f"\n[red]Score {score_pct} is below threshold {fail_on_score} — failing.[/]"
         )
         raise typer.Exit(1)
+
+
+@app.command()
+def diff(
+    before: Path = typer.Argument(  # noqa: B008
+        ...,
+        help="Path to the 'before' JSON report.",
+        show_default=False,
+    ),
+    after: Path = typer.Argument(  # noqa: B008
+        ...,
+        help="Path to the 'after' JSON report.",
+        show_default=False,
+    ),
+    output_format: OutputFormat = typer.Option(  # noqa: B008
+        OutputFormat.table,
+        "--output-format",
+        "-f",
+        help="Output format: table or json.",
+        case_sensitive=False,
+    ),
+    fail_on_regression: bool = typer.Option(
+        False,
+        "--fail-on-regression",
+        help="Exit with code 1 if any dimension's score regressed.",
+    ),
+) -> None:
+    """Compare quality scores between two report snapshots.
+
+    Loads two JSON reports (produced by ``qualis report --format json``) and
+    renders a per-dimension delta. Use --fail-on-regression in CI to gate on
+    any dimension score that dropped between runs.
+    """
+    from qualis.engine.diff import compute_diff
+    from qualis.report.loader import load_report
+
+    if not before.is_file():
+        console.print(f"[red]Error:[/] Before report '[cyan]{before}[/]' is not a file.")
+        raise typer.Exit(1)
+    if not after.is_file():
+        console.print(f"[red]Error:[/] After report '[cyan]{after}[/]' is not a file.")
+        raise typer.Exit(1)
+
+    before_score = load_report(before)
+    after_score = load_report(after)
+    result = compute_diff(before_score, after_score)
+
+    if output_format == OutputFormat.json:
+        payload = _asdict_safe(result)
+        console.print_json(json.dumps(payload, default=str))
+    else:
+        print_diff(result, console)
+
+    if fail_on_regression:
+        regressed = [d for d in result.dimension_deltas if d.delta < 0]
+        if regressed:
+            names = ", ".join(d.dimension.value for d in regressed)
+            console.print(f"\n[red]Regression detected in: {names} — failing.[/]")
+            raise typer.Exit(1)
