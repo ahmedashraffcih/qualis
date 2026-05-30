@@ -1,0 +1,21 @@
+name: Data Quality
+
+on:
+  pull_request:
+    paths:
+      - 'data/**'
+      - 'rules/**'
+
+jobs:
+  qualis:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ahmedashraffcih/qualis@v0.2.0
+        with:
+          rules: rules/
+          sample: data/accidents.csv
+          fail-on-score: "80"

@@ -1,0 +1,81 @@
+name: "Qualis Data Quality Check"
+description: "Run Qualis DQ checks on a sample file and post a scorecard to the PR."
+author: "ahmedashraffcih"
+branding:
+  icon: "check-circle"
+  color: "purple"
+
+inputs:
+  rules:
+    description: "Path to the rules directory containing YAML rule files."
+    required: false
+    default: "rules"
+  sample:
+    description: "Path to a CSV or Parquet sample file to validate."
+    required: true
+  fail-on-score:
+    description: "Exit non-zero when aggregate score (0-100) falls below this threshold."
+    required: false
+    default: "0"
+  python-version:
+    description: "Python version to set up for the action."
+    required: false
+    default: "3.12"
+  qualis-version:
+    description: "Pinned Qualis version (PyPI). Defaults to the latest release."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Qualis
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.qualis-version }}" ]; then
+          pip install "qualis==${{ inputs.qualis-version }}"
+        else
+          pip install qualis
+        fi
+
+    - name: Generate JSON report
+      shell: bash
+      run: |
+        qualis report \
+          --rules "${{ inputs.rules }}" \
+          --sample "${{ inputs.sample }}" \
+          --format json \
+          --output qualis-report.json
+
+    - name: Render PR comment
+      shell: bash
+      run: |
+        python -m qualis.github qualis-report.json "${{ github.sha }}" > qualis-comment.md
+        cat qualis-comment.md
+
+    - name: Upload report artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: qualis-report
+        path: qualis-report.json
+        retention-days: 30
+
+    - name: Post PR comment
+      if: github.event_name == 'pull_request'
+      uses: marocchino/sticky-pull-request-comment@v2
+      with:
+        path: qualis-comment.md
+        header: qualis-scorecard
+
+    - name: Gate on aggregate score
+      shell: bash
+      run: |
+        qualis check \
+          --rules "${{ inputs.rules }}" \
+          --sample "${{ inputs.sample }}" \
+          --fail-on-score "${{ inputs.fail-on-score }}"
