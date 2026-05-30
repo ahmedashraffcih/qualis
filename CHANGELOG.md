@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.0 (2026-05-30)
+
+**Featured commands:** `qualis diff` (score comparison), `qualis discover` (rule suggestion), `qualis-github-action`.
+
+- **`qualis diff`** — compare quality scores between two runs with trend arrows; `--fail-on-regression` for CI gates
+- **`qualis discover`** — statistical profiler + heuristic rule suggester; interactive `git add -p` style review; pure deterministic (no LLM API key required)
+- **GitHub Action** — composite action posts a sticky PR comment with the scorecard; uploads the HTML report as an artifact
+- **3 new check types**: `in_set`, `row_count`, `not_negative` across DuckDB and PostgreSQL adapters
+- **PostgreSQL adapter** check methods extended for all 8 check types
+- Reports loader (`load_report`) reconstructs a `DatasetScore` from a JSON report file
+- `run_detailed()` on `CheckRunner` returns both `DatasetScore` and `list[CheckResult]`
+
 ## v0.1.1 (2026-05-27)
 
 - HTML scorecard report — single-file, traffic-light hero, DAMA dimension bars, drilldown table

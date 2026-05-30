@@ -289,13 +289,21 @@ def report(
         min=0,
         max=100,
     ),
+    open_browser: bool = typer.Option(
+        True,
+        "--open/--no-open",
+        help=(
+            "Open the HTML report in the default browser after generation. "
+            "Auto-disabled when stdout is not a TTY (CI / pipes / test runners)."
+        ),
+    ),
 ) -> None:
     """Generate a quality report (HTML scorecard or JSON).
 
     Runs all data quality checks and emits either a self-contained HTML
     scorecard (default) or a JSON export.  The HTML report is opened in
-    the default browser automatically.  Exits with code 1 when the score
-    falls below --fail-on-score.
+    the default browser when running interactively; pass --no-open to
+    suppress.  Exits with code 1 when the score falls below --fail-on-score.
     """
     if not rules.is_dir():
         console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' is not a directory.")
@@ -331,13 +339,12 @@ def report(
         raise typer.Exit(1) from exc
 
     if format == ReportFormat.html:
-        # Derive a sensible default output name if the user left it as the
-        # default but switched format to json — keep .html for html output.
         save_html_report(score, output, check_results=check_results)
         console.print(
             f"\n[bold green]HTML report saved[/] → [cyan]{output}[/]"
         )
-        webbrowser.open(output.resolve().as_uri())
+        if open_browser and sys.stdout.isatty():
+            webbrowser.open(output.resolve().as_uri())
     else:
         payload = _asdict_safe(score)
         output.parent.mkdir(parents=True, exist_ok=True)
