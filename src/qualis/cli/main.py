@@ -411,3 +411,102 @@ def diff(
             names = ", ".join(d.dimension.value for d in regressed)
             console.print(f"\n[red]Regression detected in: {names} — failing.[/]")
             raise typer.Exit(1)
+
+
+@app.command()
+def discover(
+    sample: Path = typer.Option(  # noqa: B008
+        ...,
+        "--sample",
+        "-s",
+        help="Path to a CSV or Parquet sample file to profile.",
+        show_default=False,
+    ),
+    table: str = typer.Option(
+        "",
+        "--table",
+        "-t",
+        help="Table name to register (defaults to the sample file stem).",
+    ),
+    output: Path = typer.Option(  # noqa: B008
+        Path("rules/discovered.yaml"),
+        "--output",
+        "-o",
+        help="Output YAML file to write accepted suggestions.",
+    ),
+    batch: bool = typer.Option(
+        False,
+        "--batch",
+        help="Accept all suggestions without prompting (for CI).",
+    ),
+) -> None:
+    """Profile data and suggest DQ rules — review interactively or in batch.
+
+    Statistical, deterministic profiling. No LLM required. The suggestions
+    are pure heuristics over observed statistics — review them carefully
+    before promoting to production rules.
+    """
+    from qualis.adapters.duckdb.adapter import DuckDBAdapter
+    from qualis.discover.profiler import profile_table
+    from qualis.discover.suggester import suggest_rules
+    from qualis.discover.writer import write_suggestions
+
+    if not sample.is_file():
+        console.print(f"[red]Error:[/] Sample path '[cyan]{sample}[/]' is not a file.")
+        raise typer.Exit(1)
+
+    table_name = table or sample.stem
+    adapter = DuckDBAdapter()
+    if sample.suffix == ".csv":
+        adapter.register_csv(table_name, str(sample))
+    elif sample.suffix == ".parquet":
+        adapter.register_parquet(table_name, str(sample))
+    else:
+        console.print(f"[red]Error:[/] Unsupported sample format '{sample.suffix}'.")
+        raise typer.Exit(1)
+
+    console.print(f"\nProfiling [cyan]{table_name}[/]…")
+    profile = profile_table(adapter, table_name)
+    console.print(
+        f"  [dim]→ {profile.row_count} rows, {len(profile.columns)} columns[/]\n"
+    )
+
+    suggestions = suggest_rules(profile)
+    if not suggestions:
+        console.print("[yellow]No suggestions generated — try a richer sample.[/]")
+        raise typer.Exit(0)
+
+    accepted = []
+    if batch:
+        accepted = list(suggestions)
+        for s in accepted:
+            console.print(f"  [green]✓[/] {s.rule.id}  [dim]({s.confidence})[/]")
+    else:
+        for i, s in enumerate(suggestions, 1):
+            console.print(
+                f"\n[bold]({i}/{len(suggestions)})[/] "
+                f"Suggested: [cyan]{s.rule.dataset}.{s.rule.column}[/] · "
+                f"[magenta]{s.rule.check}[/]"
+            )
+            if isinstance(s.rule.params, type(s.rule.params)) and s.rule.params.__dict__:
+                console.print(f"  Parameters: [dim]{s.rule.params}[/]")
+            console.print(
+                f"  Dimension: [cyan]{s.rule.dimension.value}[/] · "
+                f"Confidence: [magenta]{s.confidence}[/] · "
+                f"[dim]{s.rationale}[/]"
+            )
+            choice = typer.prompt("Accept (y), Skip (n), Quit (q)?", default="n").strip().lower()
+            if choice == "q":
+                break
+            if choice == "y":
+                accepted.append(s)
+
+    if not accepted:
+        console.print("\n[yellow]No suggestions accepted.[/]")
+        raise typer.Exit(0)
+
+    write_suggestions(accepted, output)
+    console.print(
+        f"\n[bold green]✓ {len(accepted)} rule(s) written to[/] [cyan]{output}[/]"
+    )
+    console.print(f"  Run [bold]qualis validate --rules {output.parent}[/] to verify.")

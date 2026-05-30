@@ -297,3 +297,38 @@ class TestDiffCommand:
         ])
         assert result.exit_code == 1
         assert "Regression detected" in result.output
+
+
+class TestDiscoverCommand:
+    def test_discover_batch_creates_rules_file(self, tmp_path: Path) -> None:
+        output = tmp_path / "discovered.yaml"
+        result = runner.invoke(app, [
+            "discover",
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--output", str(output),
+            "--batch",
+        ])
+        assert result.exit_code == 0
+        assert output.exists()
+
+    def test_discovered_rules_validate(self, tmp_path: Path) -> None:
+        output = tmp_path / "rules" / "discovered.yaml"
+        runner.invoke(app, [
+            "discover",
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            "--output", str(output),
+            "--batch",
+        ])
+        # The discovered rules file must validate via qualis validate
+        validate_result = runner.invoke(app, ["validate", "--rules", str(output.parent)])
+        assert validate_result.exit_code == 0
+        assert "rule(s) valid" in validate_result.output
+
+    def test_missing_sample_exits_1(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, [
+            "discover",
+            "--sample", str(tmp_path / "nonexistent.csv"),
+            "--output", str(tmp_path / "out.yaml"),
+            "--batch",
+        ])
+        assert result.exit_code == 1
