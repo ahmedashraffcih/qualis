@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from qualis.domain.enums import RuleStatus
+
 if TYPE_CHECKING:
     from qualis.domain.enums import DQDimension, RuleType, Severity
     from qualis.domain.params import CheckParams
@@ -19,9 +21,17 @@ class Rule:
     column: str | None
     check: str
     params: CheckParams
+    # Optional -- defaults preserve backwards compatibility
     condition: str | None = None
     description: str = ""
     tags: list[str] = field(default_factory=list)
+    # New in v0.3.0: lifecycle, lineage, programme metadata
+    status: RuleStatus = RuleStatus.ACTIVE
+    version: int | None = None
+    supersedes: str | None = None
+    deprecated_at: str | None = None
+    approved_by: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

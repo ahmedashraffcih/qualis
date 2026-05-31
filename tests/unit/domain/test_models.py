@@ -306,3 +306,79 @@ class TestDatasetScore:
 
     def test_is_dataclass(self) -> None:
         assert dataclasses.is_dataclass(DatasetScore)
+
+
+# ---------------------------------------------------------------------------
+# v0.3.0: Rule lifecycle, lineage, and metadata fields
+# ---------------------------------------------------------------------------
+
+
+def test_rule_has_default_status_active() -> None:
+    from qualis.domain.enums import DQDimension, RuleStatus, RuleType, Severity
+    from qualis.domain.models import Rule
+    from qualis.domain.params import NotNullParams
+
+    rule = Rule(
+        id="r", name="r", dimension=DQDimension.COMPLETENESS,
+        rule_type=RuleType.AGGREGATE, severity=Severity.CRITICAL,
+        dataset="d", column="c", check="not_null", params=NotNullParams(),
+    )
+    assert rule.status == RuleStatus.ACTIVE
+
+
+def test_rule_lineage_fields_default_to_none() -> None:
+    from qualis.domain.enums import DQDimension, RuleType, Severity
+    from qualis.domain.models import Rule
+    from qualis.domain.params import NotNullParams
+
+    rule = Rule(
+        id="r", name="r", dimension=DQDimension.COMPLETENESS,
+        rule_type=RuleType.AGGREGATE, severity=Severity.CRITICAL,
+        dataset="d", column="c", check="not_null", params=NotNullParams(),
+    )
+    assert rule.version is None
+    assert rule.supersedes is None
+    assert rule.deprecated_at is None
+    assert rule.approved_by is None
+
+
+def test_rule_metadata_defaults_to_empty_dict() -> None:
+    from qualis.domain.enums import DQDimension, RuleType, Severity
+    from qualis.domain.models import Rule
+    from qualis.domain.params import NotNullParams
+
+    rule = Rule(
+        id="r", name="r", dimension=DQDimension.COMPLETENESS,
+        rule_type=RuleType.AGGREGATE, severity=Severity.CRITICAL,
+        dataset="d", column="c", check="not_null", params=NotNullParams(),
+    )
+    assert rule.metadata == {}
+
+
+def test_rule_can_carry_custom_metadata() -> None:
+    from qualis.domain.enums import DQDimension, RuleType, Severity
+    from qualis.domain.models import Rule
+    from qualis.domain.params import NotNullParams
+
+    rule = Rule(
+        id="r", name="r", dimension=DQDimension.COMPLETENESS,
+        rule_type=RuleType.AGGREGATE, severity=Severity.CRITICAL,
+        dataset="d", column="c", check="not_null", params=NotNullParams(),
+        metadata={"owner": "data-team", "cde": True, "frequency": "daily"},
+    )
+    assert rule.metadata["owner"] == "data-team"
+    assert rule.metadata["cde"] is True
+
+
+def test_existing_rule_construction_still_works() -> None:
+    """Backwards-compat: existing call-sites must keep working."""
+    from qualis.domain.enums import DQDimension, RuleType, Severity
+    from qualis.domain.models import Rule
+    from qualis.domain.params import NotNullParams
+
+    rule = Rule(
+        id="r", name="r", dimension=DQDimension.COMPLETENESS,
+        rule_type=RuleType.AGGREGATE, severity=Severity.CRITICAL,
+        dataset="d", column="c", check="not_null", params=NotNullParams(),
+    )
+    assert rule.id == "r"
