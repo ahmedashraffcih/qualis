@@ -1,0 +1,11 @@
+dataset: accidents
+business_grain: "one row per accident, deduplicated by (accident_id, report_date)"
+columns:
+  severity_code:
+    sentinels:
+      - value: "0"
+        meaning: "unknown"
+    exceptions: ["LEGACY_FATAL"]
+    notes: "0 = unknown is data-entry placeholder; legacy code retired 2024"
+  location_id:
+    notes: "may be null for accidents on unmapped roads"
