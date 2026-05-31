@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.2.2 (2026-05-31)
+
+Trust-calibration patch — informed by a live-delivery practitioner's critique that
+"a tool that generates confidently from thin context will produce rules that look
+right but are wrong, at scale."
+
+- **`in_set` confidence dropped from `high` to `medium`.** The heuristic observes
+  values in the profiled dataset only; it cannot know the authoritative valid
+  domain. Sentinels (e.g., `0` meaning "unknown") and rarely-occurring legitimate
+  values are silently codified as "valid" today. Calling this "high confidence"
+  was epistemically wrong.
+- **Rationale now explicitly warns** to verify against the authoritative valid
+  domain before accepting.
+
 ## v0.2.1 (2026-05-31)
 
 Bug-fix release based on data-team testing (Anwar, Data Engineer).

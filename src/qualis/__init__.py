@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 from qualis.domain.enums import DQDimension, RunStatus, Severity
 from qualis.domain.models import DatasetScore, Rule, Violation

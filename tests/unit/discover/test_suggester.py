@@ -92,6 +92,35 @@ def test_in_set_suggested_for_low_cardinality_string() -> None:
     assert in_set[0].rule.params.values == ["A", "B", "C"]
 
 
+def test_in_set_confidence_is_medium_not_high() -> None:
+    """in_set is medium-confidence: we only see observed values, not the
+    authoritative valid domain. High would be epistemically wrong."""
+    cols = [
+        _col(
+            name="status",
+            inferred_type="string",
+            distinct_count=3,
+            sample_values=["A", "B", "C"],
+        )
+    ]
+    in_set = next(s for s in suggest_rules(_profile(cols)) if s.rule.check == "in_set")
+    assert in_set.confidence == "medium"
+
+
+def test_in_set_rationale_warns_to_verify_against_source_of_truth() -> None:
+    cols = [
+        _col(
+            name="status",
+            inferred_type="string",
+            distinct_count=3,
+            sample_values=["A", "B", "C"],
+        )
+    ]
+    in_set = next(s for s in suggest_rules(_profile(cols)) if s.rule.check == "in_set")
+    assert "verify" in in_set.rationale.lower()
+    assert "authoritative" in in_set.rationale.lower()
+
+
 def test_between_suggested_for_numeric_column() -> None:
     cols = [
         _col(

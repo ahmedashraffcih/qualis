@@ -125,8 +125,17 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
                     check="in_set",
                     params=InSetParams(values=list(col.sample_values)),
                 ),
-                confidence="high",
-                rationale=f"{col.distinct_count} distinct values observed",
+                # Confidence is MEDIUM — we know only what we observed, not the
+                # authoritative valid domain. A new code added next week would
+                # break this rule. Reviewer should verify against the source of
+                # truth (data catalog, reference data, domain owner) before
+                # accepting. Sentinels (0 = unknown, etc.) are NOT detected
+                # by this heuristic and will be silently codified as "valid".
+                confidence="medium",
+                rationale=(
+                    f"{col.distinct_count} distinct values observed in profiled data — "
+                    "verify against the authoritative valid domain before accepting"
+                ),
             )
         )
 
