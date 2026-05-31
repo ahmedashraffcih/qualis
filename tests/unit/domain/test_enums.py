@@ -185,3 +185,20 @@ class TestEnumInvalidValues:
     def test_check_type_invalid_value_raises(self) -> None:
         with pytest.raises(ValueError):
             CheckType("not_null_check")
+
+
+def test_rule_status_has_four_members() -> None:
+    from qualis.domain.enums import RuleStatus
+    assert len(RuleStatus) == 4
+
+
+def test_rule_status_values() -> None:
+    from qualis.domain.enums import RuleStatus
+    expected = {"draft", "needs_evidence", "active", "deprecated"}
+    assert {s.value for s in RuleStatus} == expected
+
+
+def test_rule_status_is_string_enum() -> None:
+    from qualis.domain.enums import RuleStatus
+    assert isinstance(RuleStatus.ACTIVE, str)
+    assert RuleStatus.ACTIVE == "active"
