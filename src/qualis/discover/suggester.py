@@ -59,6 +59,9 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
     out: list[RuleSuggestion] = []
 
     if col.total_count > 0 and col.null_count == 0:
+        # ID-like columns are nearly always business-required; treat them as critical.
+        is_id_or_pk = col.is_likely_id or col.name.lower() in {"id", "pk", "uuid"}
+        not_null_severity = Severity.CRITICAL if is_id_or_pk else Severity.WARNING
         out.append(
             RuleSuggestion(
                 rule=Rule(
@@ -66,7 +69,7 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
                     name=f"{col.name} must not be null",
                     dimension=DQDimension.COMPLETENESS,
                     rule_type=RuleType.AGGREGATE,
-                    severity=Severity.WARNING,
+                    severity=not_null_severity,
                     dataset=dataset,
                     column=col.name,
                     check="not_null",
@@ -79,7 +82,10 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
 
     if col.is_likely_id:
         non_null = col.total_count - col.null_count
-        confidence: Confidence = "high" if col.name.lower().endswith("id") else "medium"
+        is_named_id = col.name.lower().endswith("id")
+        confidence: Confidence = "high" if is_named_id else "medium"
+        # Named IDs are foundational — duplicate IDs break downstream joins.
+        unique_severity = Severity.CRITICAL if is_named_id else Severity.WARNING
         out.append(
             RuleSuggestion(
                 rule=Rule(
@@ -87,7 +93,7 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
                     name=f"{col.name} must be unique",
                     dimension=DQDimension.UNIQUENESS,
                     rule_type=RuleType.AGGREGATE,
-                    severity=Severity.WARNING,
+                    severity=unique_severity,
                     dataset=dataset,
                     column=col.name,
                     check="unique",

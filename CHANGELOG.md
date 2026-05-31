@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.1 (2026-05-31)
+
+Bug-fix release based on data-team testing (Anwar, Data Engineer).
+
+- **`--rules` now accepts a file OR directory.** `qualis discover` writes a YAML file; the next step (`validate`/`check`/`report --rules <file>`) used to error "is not a directory." Fixed via new `load_rules_from_path()` that auto-detects.
+- **`qualis init` scaffold runs first-try.** Old scaffold referenced `my_table`/`my_column` placeholders that crashed on `qualis check`. New scaffold creates `rules/completeness.yaml` + `data/example.csv` + three runnable rules. The "next steps" message gives the exact working command.
+- **`qualis discover` success message points at the actual output path** (not `output.parent`).
+- **`qualis discover` sets `severity: critical`** for `not_null` and `unique` rules on ID-like columns. Previously every suggestion was `warning`.
+
 ## v0.2.0 (2026-05-30)
 
 **Featured commands:** `qualis diff` (score comparison), `qualis discover` (rule suggestion), `qualis-github-action`.

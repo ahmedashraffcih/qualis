@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from qualis.adapters.duckdb.adapter import DuckDBAdapter
 from qualis.adapters.in_memory.adapter import InMemoryAdapter
-from qualis.config.loader import load_rules_from_directory
+from qualis.config.loader import load_rules_from_path
 from qualis.domain.enums import DQDimension
 from qualis.engine.checker import CheckRunner
 
@@ -37,7 +37,7 @@ def create_checker(settings: QualisSettings, sample_path: Path | None = None) ->
     else:
         adapter = DuckDBAdapter()
 
-    rules = load_rules_from_directory(settings.rules_dir)
+    rules = load_rules_from_path(settings.rules_dir)
     weights: dict[DQDimension, float] = {
         DQDimension.COMPLETENESS: 0.40,
         DQDimension.VALIDITY: 0.35,

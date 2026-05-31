@@ -43,6 +43,22 @@ def test_not_null_suggested_for_zero_null_column() -> None:
     assert not_null[0].confidence == "high"
 
 
+def test_not_null_severity_is_warning_for_non_id_column() -> None:
+    from qualis.domain.enums import Severity
+    cols = [_col(name="email", null_count=0, total_count=10)]
+    suggestions = suggest_rules(_profile(cols))
+    not_null = next(s for s in suggestions if s.rule.check == "not_null")
+    assert not_null.rule.severity == Severity.WARNING
+
+
+def test_not_null_severity_is_critical_for_id_column() -> None:
+    from qualis.domain.enums import Severity
+    cols = [_col(name="user_id", null_count=0, is_likely_id=True, distinct_count=100)]
+    suggestions = suggest_rules(_profile(cols))
+    not_null = next(s for s in suggestions if s.rule.check == "not_null")
+    assert not_null.rule.severity == Severity.CRITICAL
+
+
 def test_unique_suggested_for_id_column() -> None:
     cols = [_col(name="user_id", is_likely_id=True, distinct_count=100)]
     suggestions = suggest_rules(_profile(cols))
@@ -50,6 +66,14 @@ def test_unique_suggested_for_id_column() -> None:
     assert len(unique) == 1
     assert isinstance(unique[0].rule.params, UniqueParams)
     assert unique[0].confidence == "high"
+
+
+def test_unique_severity_is_critical_for_named_id_column() -> None:
+    from qualis.domain.enums import Severity
+    cols = [_col(name="user_id", is_likely_id=True, distinct_count=100)]
+    suggestions = suggest_rules(_profile(cols))
+    unique = next(s for s in suggestions if s.rule.check == "unique")
+    assert unique.rule.severity == Severity.CRITICAL
 
 
 def test_in_set_suggested_for_low_cardinality_string() -> None:

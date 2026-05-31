@@ -14,7 +14,7 @@ from rich.console import Console
 from qualis import __version__
 from qualis.adapters.console import print_diff, print_score
 from qualis.bootstrap import create_checker
-from qualis.config.loader import load_rules_from_directory
+from qualis.config.loader import load_rules_from_path
 from qualis.config.settings import QualisSettings
 from qualis.domain.params import CustomParams
 from qualis.report.scorecard import save_html_report
@@ -33,14 +33,45 @@ app = typer.Typer(
 console = Console()
 
 _INIT_COMPLETENESS_YAML = """\
+# Example rules for the bundled sample dataset (data/example.csv).
+# Replace these with rules for your own data — point `dataset:` at your
+# CSV/Parquet filename (without extension) and the column names you want
+# to check.
 rules:
   - id: DQ-COMP-001
-    name: "Column value is required"
+    name: "id is required"
     dimension: completeness
     severity: critical
-    dataset: my_table
-    column: my_column
+    dataset: example
+    column: id
     check: not_null
+
+  - id: DQ-UNIQ-001
+    name: "id must be unique"
+    dimension: uniqueness
+    severity: critical
+    dataset: example
+    column: id
+    check: unique
+
+  - id: DQ-VAL-001
+    name: "status is one of the allowed values"
+    dimension: validity
+    severity: warning
+    dataset: example
+    column: status
+    check: in_set
+    parameters:
+      values: ["active", "inactive", "pending"]
+"""
+
+_INIT_EXAMPLE_CSV = """\
+id,status,amount
+1,active,100
+2,pending,250
+3,active,75
+4,inactive,0
+5,active,500
 """
 
 _INIT_GITIGNORE = """\
@@ -65,20 +96,30 @@ def init(
         show_default=True,
     ),
 ) -> None:
-    """Scaffold a new Qualis project with a starter rules directory.
+    """Scaffold a new Qualis project with runnable example rules + sample data.
 
     Creates:
 
     \b
-      rules/completeness.yaml   — example not_null rule
+      rules/completeness.yaml   — three example rules against `example`
+      data/example.csv          — matching sample dataset
       .gitignore                — ignores .env and __pycache__/
+
+    The scaffold is runnable on first try:
+        qualis check --rules rules/ --sample data/example.csv
     """
     rules_dir = directory / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
+    data_dir = directory / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
 
     completeness_file = rules_dir / "completeness.yaml"
     if not completeness_file.exists():
         completeness_file.write_text(_INIT_COMPLETENESS_YAML, encoding="utf-8")
+
+    example_csv = data_dir / "example.csv"
+    if not example_csv.exists():
+        example_csv.write_text(_INIT_EXAMPLE_CSV, encoding="utf-8")
 
     gitignore = directory / ".gitignore"
     if not gitignore.exists():
@@ -87,13 +128,14 @@ def init(
     console.print(f"\n[bold green]Qualis project initialised[/] in [cyan]{directory}[/]\n")
     console.print("Next steps:\n")
     console.print(
-        "  1. Edit [cyan]rules/completeness.yaml[/] to describe your data quality rules."
+        "  1. Run [cyan]qualis validate --rules rules/[/] to confirm your YAML is valid."
     )
     console.print(
-        "  2. Run [cyan]qualis validate --rules rules/[/] to confirm your YAML is valid."
+        "  2. Run [cyan]qualis check --rules rules/ --sample data/example.csv[/] "
+        "to score the bundled demo."
     )
     console.print(
-        "  3. Run [cyan]qualis check --rules rules/ --sample data.csv[/] against a sample file.\n"
+        "  3. Edit [cyan]rules/completeness.yaml[/] and point it at your own data.\n"
     )
 
 
@@ -111,12 +153,12 @@ def validate(
     Parses every rule and reports any errors.  Exits with code 1 when
     validation fails.
     """
-    if not rules.is_dir():
-        console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' is not a directory.")
+    if not (rules.is_dir() or rules.is_file()):
+        console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' does not exist.")
         raise typer.Exit(1)
 
     try:
-        loaded = load_rules_from_directory(rules)
+        loaded = load_rules_from_path(rules)
     except ValueError as exc:
         console.print(f"[red]Validation failed:[/] {exc}")
         raise typer.Exit(1) from exc
@@ -192,8 +234,8 @@ def check(
     sample, and prints a score report.  Exits with code 1 when the
     score falls below --fail-on-score or when a blocking error is found.
     """
-    if not rules.is_dir():
-        console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' is not a directory.")
+    if not (rules.is_dir() or rules.is_file()):
+        console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' does not exist.")
         raise typer.Exit(1)
 
     if not sample.is_file():
@@ -202,7 +244,7 @@ def check(
 
     # Validate rules first so we can detect CustomParams before running
     try:
-        loaded_rules = load_rules_from_directory(rules)
+        loaded_rules = load_rules_from_path(rules)
     except ValueError as exc:
         console.print(f"[red]Rules validation failed:[/] {exc}")
         raise typer.Exit(1) from exc
@@ -305,8 +347,8 @@ def report(
     the default browser when running interactively; pass --no-open to
     suppress.  Exits with code 1 when the score falls below --fail-on-score.
     """
-    if not rules.is_dir():
-        console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' is not a directory.")
+    if not (rules.is_dir() or rules.is_file()):
+        console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' does not exist.")
         raise typer.Exit(1)
 
     if not sample.is_file():
@@ -314,7 +356,7 @@ def report(
         raise typer.Exit(1)
 
     try:
-        loaded_rules = load_rules_from_directory(rules)
+        loaded_rules = load_rules_from_path(rules)
     except ValueError as exc:
         console.print(f"[red]Rules validation failed:[/] {exc}")
         raise typer.Exit(1) from exc
@@ -516,4 +558,5 @@ def discover(
     console.print(
         f"\n[bold green]✓ {len(accepted)} rule(s) written to[/] [cyan]{output}[/]"
     )
-    console.print(f"  Run [bold]qualis validate --rules {output.parent}[/] to verify.")
+    # Use the actual output path (file or dir) — `--rules` now accepts either.
+    console.print(f"  Run [bold]qualis validate --rules {output}[/] to verify.")

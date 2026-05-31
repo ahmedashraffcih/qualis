@@ -167,3 +167,16 @@ def load_rules_from_directory(directory: Path) -> list[Rule]:
         for path in sorted(directory.glob(ext)):
             rules.extend(load_rules_from_file(path))
     return rules
+
+
+def load_rules_from_path(path: Path) -> list[Rule]:
+    """Load rules from either a YAML file or a directory of YAML files.
+
+    This is the convenience entry point for CLI commands — callers don't have to
+    know whether the user passed a single file or a directory.
+    """
+    if path.is_file():
+        return load_rules_from_file(path)
+    if path.is_dir():
+        return load_rules_from_directory(path)
+    raise FileNotFoundError(f"Rules path not found: {path}")
