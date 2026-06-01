@@ -1,13 +1,19 @@
 # Qualis
 
-**Data quality framework that tells you what failed, not just that something did.**
+> **Data quality rules you can sign off on.**
 
-> *Qualis* — Latin for "of what kind."
+The generation is the commodity. The grounding, the control, and the
+upkeep are the value. Qualis is the open-source Python framework that
+treats your DQ rulebook as a versioned artefact — grounded in declared
+context (sentinels, exceptions, business grain), reviewed under a real
+approval workflow, and validated against your programme's required
+metadata standard.
 
-Qualis lets you define data quality rules in plain YAML and run them against
-CSV or Parquet files (or any database via a pluggable adapter).  The output is
-a scored report that names the failing rows, columns, and rules — so your team
-can act immediately instead of hunting through raw data.
+*Qualis* — Latin for "of what kind."
+
+Define rules in plain YAML, run them against CSV/Parquet files or any
+database via a pluggable adapter, and get a scored report that names
+the failing rows, columns, and rules — so your team can act immediately.
 
 ---
 
