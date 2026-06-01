@@ -257,3 +257,16 @@ class TestNotNegativeParams:
         p = NotNegativeParams()
         with pytest.raises(dataclasses.FrozenInstanceError):
             p.x = 1  # type: ignore[attr-defined]
+
+
+def test_reference_lookup_params_construction() -> None:
+    from qualis.domain.params import ReferenceLookupParams
+    p = ReferenceLookupParams(reference="ref_codes", key_column="code")
+    assert p.reference == "ref_codes"
+    assert p.key_column == "code"
+
+
+def test_reference_lookup_params_is_check_params() -> None:
+    from qualis.domain.params import ReferenceLookupParams
+    p: CheckParams = ReferenceLookupParams(reference="x", key_column="y")
+    assert isinstance(p, ReferenceLookupParams)

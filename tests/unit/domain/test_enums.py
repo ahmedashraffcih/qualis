@@ -114,8 +114,8 @@ class TestCheckType:
     def test_has_not_negative(self) -> None:
         assert CheckType.NOT_NEGATIVE.value == "not_negative"
 
-    def test_has_exactly_nine_members(self) -> None:
-        assert len(CheckType) == 9
+    def test_has_exactly_ten_members(self) -> None:
+        assert len(CheckType) == 10
 
     def test_is_string_enum(self) -> None:
         assert isinstance(CheckType.NOT_NULL, str)
@@ -123,7 +123,7 @@ class TestCheckType:
     def test_all_check_types_present(self) -> None:
         expected = {
             "not_null", "unique", "between", "regex", "sql", "custom",
-            "in_set", "row_count", "not_negative",
+            "in_set", "row_count", "not_negative", "reference_lookup",
         }
         actual = {ct.value for ct in CheckType}
         assert actual == expected
@@ -202,3 +202,8 @@ def test_rule_status_is_string_enum() -> None:
     from qualis.domain.enums import RuleStatus
     assert isinstance(RuleStatus.ACTIVE, str)
     assert RuleStatus.ACTIVE == "active"
+
+
+def test_check_type_includes_reference_lookup() -> None:
+    assert CheckType.REFERENCE_LOOKUP == "reference_lookup"
+    assert "reference_lookup" in {c.value for c in CheckType}

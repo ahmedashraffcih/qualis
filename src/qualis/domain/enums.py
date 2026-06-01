@@ -47,6 +47,7 @@ class CheckType(StrEnum):
     IN_SET = "in_set"
     ROW_COUNT = "row_count"
     NOT_NEGATIVE = "not_negative"
+    REFERENCE_LOOKUP = "reference_lookup"
 
 
 class RuleStatus(StrEnum):

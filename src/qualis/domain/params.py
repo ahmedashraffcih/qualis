@@ -50,6 +50,20 @@ class NotNegativeParams:
     pass
 
 
+@dataclass(frozen=True)
+class ReferenceLookupParams:
+    """Parameters for reference_lookup check.
+
+    ``reference`` is an identifier the ReferenceDataPort resolves (file
+    path, table name, or registered logical name -- adapter-dependent).
+    ``key_column`` is the column in the reference whose values the
+    rule's target column must match.
+    """
+
+    reference: str
+    key_column: str
+
+
 CheckParams = (
     NotNullParams
     | UniqueParams
@@ -60,4 +74,5 @@ CheckParams = (
     | InSetParams
     | RowCountParams
     | NotNegativeParams
+    | ReferenceLookupParams  # new in v0.3.0
 )
