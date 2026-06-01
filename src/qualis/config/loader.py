@@ -19,6 +19,7 @@ from qualis.domain.params import (
     InSetParams,
     NotNegativeParams,
     NotNullParams,
+    ReferenceLookupParams,
     RegexParams,
     RowCountParams,
     SqlParams,
@@ -103,6 +104,11 @@ def _parse_params(check: str, parameters: dict[str, Any] | None) -> CheckParams:
         )
     if check == CheckType.NOT_NEGATIVE:
         return NotNegativeParams()
+    if check == CheckType.REFERENCE_LOOKUP:
+        return ReferenceLookupParams(
+            reference=str(params.get("reference", "")),
+            key_column=str(params.get("key_column", "")),
+        )
     # Unreachable — check has already been validated against CheckType values
     raise ValueError(f"Unhandled check type: {check}")  # pragma: no cover
 

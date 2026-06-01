@@ -57,3 +57,16 @@ class DatabasePort(Protocol):
         table: str,
         column: str,
     ) -> dict[str, int]: ...
+
+    def check_reference_lookup(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        valid_values: list[str],
+    ) -> dict[str, int]:
+        """Count rows where column is NOT NULL and not in *valid_values*.
+
+        Returns ``{"invalid_count": int, "total_count": int}``.
+        """
+        ...

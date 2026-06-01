@@ -61,6 +61,16 @@ NOT_NEGATIVE_SQL = (
     "FROM {table}"
 )
 
+REFERENCE_LOOKUP_SQL = (
+    "SELECT "
+    "  COUNT(*) FILTER ("
+    '    WHERE "{column}" IS NOT NULL '
+    '    AND CAST("{column}" AS VARCHAR) NOT IN ({value_list})'
+    "  ) AS invalid_count, "
+    "  COUNT(*) AS total_count "
+    "FROM {table}"
+)
+
 TABLE_EXISTS_SQL = (
     "SELECT COUNT(*) AS cnt FROM information_schema.tables "
     "WHERE table_name = '{table}'"

@@ -14,6 +14,7 @@ from qualis.adapters.postgres.sql_templates import (
     IN_SET_SQL,
     NOT_NEGATIVE_SQL,
     NOT_NULL_SQL,
+    REFERENCE_LOOKUP_SQL,
     REGEX_SQL,
     ROW_COUNT_SQL,
     TABLE_EXISTS_SQL,
@@ -228,6 +229,23 @@ class PostgresAdapter:
                 row = cur.fetchone()
         negative, total = (row[0], row[1]) if row else (0, 0)
         return {"negative_count": int(negative), "total_count": int(total)}
+
+    def check_reference_lookup(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        valid_values: list[str],
+    ) -> dict[str, int]:
+        table_ref = _qualified(schema, table)
+        sql = REFERENCE_LOOKUP_SQL.format(column=column, table=table_ref)
+        with self._pool.connection() as conn:
+            conn.execute("SET TRANSACTION READ ONLY")
+            with conn.cursor() as cur:
+                cur.execute(sql, {"valid_values": valid_values})
+                row = cur.fetchone()
+        invalid, total = (row[0], row[1]) if row else (0, 0)
+        return {"invalid_count": int(invalid), "total_count": int(total)}
 
     # ------------------------------------------------------------------
     # Lifecycle

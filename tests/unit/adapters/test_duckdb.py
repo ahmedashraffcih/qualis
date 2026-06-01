@@ -98,3 +98,22 @@ def test_check_not_negative_on_positive_ids(adapter: DuckDBAdapter) -> None:
     result = adapter.check_not_negative("", "accidents", "id")
     assert result["negative_count"] == 0
     assert result["total_count"] == 6
+
+
+def test_check_reference_lookup_finds_invalid(adapter: DuckDBAdapter) -> None:
+    # severity_code in the fixture has FATAL/SERIOUS/INVALID/MINOR/FATAL/PROPERTY.
+    # Restrict valid set to FATAL/SERIOUS/MINOR/PROPERTY — flags INVALID.
+    result = adapter.check_reference_lookup(
+        "", "accidents", "severity_code",
+        valid_values=["FATAL", "SERIOUS", "MINOR", "PROPERTY"],
+    )
+    assert result["invalid_count"] == 1
+    assert result["total_count"] == 6
+
+
+def test_check_reference_lookup_all_valid(adapter: DuckDBAdapter) -> None:
+    result = adapter.check_reference_lookup(
+        "", "accidents", "severity_code",
+        valid_values=["FATAL", "SERIOUS", "MINOR", "PROPERTY", "INVALID"],
+    )
+    assert result["invalid_count"] == 0

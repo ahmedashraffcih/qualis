@@ -125,6 +125,22 @@ class InMemoryAdapter:
         )
         return {"negative_count": negative_count, "total_count": len(rows)}
 
+    def check_reference_lookup(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        valid_values: list[str],
+    ) -> dict[str, int]:
+        rows = self._get_rows(schema, table)
+        valid_set = set(valid_values)
+        invalid_count = sum(
+            1
+            for r in rows
+            if r.get(column) is not None and r.get(column) not in valid_set
+        )
+        return {"invalid_count": invalid_count, "total_count": len(rows)}
+
     def _extract_table_from_sql(self, sql: str) -> str | None:
         match = re.search(r"FROM\s+(\S+)", sql, re.IGNORECASE)
         return match.group(1) if match else None

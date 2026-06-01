@@ -225,3 +225,56 @@ class TestNotNegative:
         result = engine.evaluate_rule(rule)
         assert not result.passed
         assert result.violation_count == 1
+
+
+# ---------------------------------------------------------------------------
+# v0.3.0: reference_lookup check
+# ---------------------------------------------------------------------------
+
+
+def test_reference_lookup_finds_invalid_keys() -> None:
+    from qualis.adapters.in_memory.reference_data import InMemoryReferenceData
+    from qualis.domain.params import ReferenceLookupParams
+
+    db = InMemoryAdapter()
+    db.add_table("public", "orders", [
+        {"order_id": 1, "country": "US"},
+        {"order_id": 2, "country": "ZZ"},  # invalid
+        {"order_id": 3, "country": "GB"},
+    ])
+    ref = InMemoryReferenceData()
+    ref.register("country_codes", "code", ["US", "GB", "DE"])
+
+    rule = Rule(
+        id="r1", name="x", dimension=DQDimension.INTEGRITY,
+        rule_type=RuleType.REFERENTIAL, severity=Severity.CRITICAL,
+        dataset="orders", column="country", check="reference_lookup",
+        params=ReferenceLookupParams(reference="country_codes", key_column="code"),
+    )
+    engine = RuleEngine(db, schema="public", reference_data=ref)
+    result = engine.evaluate_rule(rule)
+    assert not result.passed
+    assert result.violation_count == 1
+
+
+def test_reference_lookup_passes_when_all_keys_valid() -> None:
+    from qualis.adapters.in_memory.reference_data import InMemoryReferenceData
+    from qualis.domain.params import ReferenceLookupParams
+
+    db = InMemoryAdapter()
+    db.add_table("public", "orders", [
+        {"order_id": 1, "country": "US"},
+        {"order_id": 2, "country": "GB"},
+    ])
+    ref = InMemoryReferenceData()
+    ref.register("country_codes", "code", ["US", "GB", "DE"])
+
+    rule = Rule(
+        id="r1", name="x", dimension=DQDimension.INTEGRITY,
+        rule_type=RuleType.REFERENTIAL, severity=Severity.CRITICAL,
+        dataset="orders", column="country", check="reference_lookup",
+        params=ReferenceLookupParams(reference="country_codes", key_column="code"),
+    )
+    engine = RuleEngine(db, schema="public", reference_data=ref)
+    result = engine.evaluate_rule(rule)
+    assert result.passed

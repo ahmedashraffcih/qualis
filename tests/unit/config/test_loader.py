@@ -195,3 +195,29 @@ def test_loader_reads_metadata_block(tmp_path: Path) -> None:
     assert rules[0].metadata["owner"] == "data-team"
     assert rules[0].metadata["cde"] is True
     assert rules[0].metadata["frequency"] == "daily"
+
+
+def test_loader_parses_reference_lookup_rule(tmp_path: Path) -> None:
+    from qualis.config.loader import load_rules_from_file
+    from qualis.domain.params import ReferenceLookupParams
+
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: r1\n"
+        '    name: "country FK"\n'
+        "    dimension: integrity\n"
+        "    severity: critical\n"
+        "    dataset: orders\n"
+        "    column: country\n"
+        "    check: reference_lookup\n"
+        "    parameters:\n"
+        "      reference: country_codes\n"
+        "      key_column: code\n",
+        encoding="utf-8",
+    )
+    rules = load_rules_from_file(rules_file)
+    assert len(rules) == 1
+    assert isinstance(rules[0].params, ReferenceLookupParams)
+    assert rules[0].params.reference == "country_codes"
+    assert rules[0].params.key_column == "code"

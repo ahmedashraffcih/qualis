@@ -7,6 +7,7 @@ from qualis.domain.models import CheckResult, Rule, Violation
 from qualis.domain.params import (
     BetweenParams,
     InSetParams,
+    ReferenceLookupParams,
     RegexParams,
     RowCountParams,
 )
@@ -20,9 +21,15 @@ class RuleEngine:
     enforced at the composition root.
     """
 
-    def __init__(self, adapter: Any, schema: str) -> None:
+    def __init__(
+        self,
+        adapter: Any,
+        schema: str,
+        reference_data: Any = None,
+    ) -> None:
         self._adapter = adapter
         self._schema = schema
+        self._reference_data = reference_data
 
     # ------------------------------------------------------------------
     # Public API
@@ -44,6 +51,8 @@ class RuleEngine:
             return self._check_row_count(rule)
         if rule.check == CheckType.NOT_NEGATIVE:
             return self._check_not_negative(rule)
+        if rule.check == CheckType.REFERENCE_LOOKUP:
+            return self._check_reference_lookup(rule)
         if rule.check in (CheckType.SQL, CheckType.CUSTOM):
             return self._check_stub(rule)
         # Fallback for unknown check types — return a passing stub
@@ -242,6 +251,53 @@ class RuleEngine:
             passed=negative == 0,
             violation_count=negative,
             violations=violations,
+            rows_checked=total,
+        )
+
+    def _check_reference_lookup(self, rule: Rule) -> CheckResult:
+        if not isinstance(rule.params, ReferenceLookupParams):
+            return self._check_stub(rule)
+        if self._reference_data is None:
+            # No reference data adapter wired in — record a violation so
+            # the rule isn't silently skipped.
+            return CheckResult(
+                rule=rule, passed=False, violation_count=1,
+                violations=[Violation(
+                    rule=rule, record_id=None, actual_value=None,
+                    expected="reference data adapter not configured",
+                )],
+                rows_checked=0,
+            )
+        schema, table = self._dataset_parts(rule)
+        column = rule.column or ""
+        valid_values = list(self._reference_data.load_values(
+            rule.params.reference, rule.params.key_column,
+        ))
+        # Prefer adapter SQL pushdown when available; fall back to in-memory
+        # diff via query() for adapters that don't implement it.
+        if hasattr(self._adapter, "check_reference_lookup"):
+            result = self._adapter.check_reference_lookup(
+                schema, table, column, valid_values,
+            )
+            invalid = result.get("invalid_count", 0)
+            total = result.get("total_count", 0)
+        else:
+            rows = self._adapter.query(f'SELECT "{column}" FROM "{schema}"."{table}"')
+            valid_set = set(valid_values)
+            invalid = sum(
+                1 for r in rows
+                if r.get(column) is not None and r.get(column) not in valid_set
+            )
+            total = len(rows)
+        violations = [
+            Violation(
+                rule=rule, record_id=None, actual_value=None,
+                expected=f"value present in {rule.params.reference}.{rule.params.key_column}",
+            )
+        ] * invalid
+        return CheckResult(
+            rule=rule, passed=invalid == 0,
+            violation_count=invalid, violations=violations,
             rows_checked=total,
         )
 

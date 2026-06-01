@@ -9,6 +9,7 @@ from qualis.adapters.duckdb.sql_templates import (
     IN_SET_SQL,
     NOT_NEGATIVE_SQL,
     NOT_NULL_SQL,
+    REFERENCE_LOOKUP_SQL,
     REGEX_SQL,
     ROW_COUNT_SQL,
     TABLE_EXISTS_SQL,
@@ -180,6 +181,23 @@ class DuckDBAdapter:
         row = self._con.execute(sql).fetchone()
         negative, total = (row[0], row[1]) if row else (0, 0)
         return {"negative_count": int(negative), "total_count": int(total)}
+
+    def check_reference_lookup(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        valid_values: list[str],
+    ) -> dict[str, int]:
+        table_ref = _qualified(schema, table)
+        escaped = [v.replace("'", "''") for v in valid_values]
+        value_list = ", ".join(f"'{v}'" for v in escaped) or "NULL"
+        sql = REFERENCE_LOOKUP_SQL.format(
+            column=column, table=table_ref, value_list=value_list,
+        )
+        row = self._con.execute(sql).fetchone()
+        invalid, total = (row[0], row[1]) if row else (0, 0)
+        return {"invalid_count": int(invalid), "total_count": int(total)}
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -68,6 +68,16 @@ SELECT
 FROM {table}
 """
 
+REFERENCE_LOOKUP_SQL = """
+SELECT
+    COUNT(*) FILTER (
+        WHERE "{column}" IS NOT NULL
+        AND NOT ("{column}"::text = ANY(%(valid_values)s))
+    ) AS invalid_count,
+    COUNT(*) AS total_count
+FROM {table}
+"""
+
 TABLE_EXISTS_SQL = """
 SELECT COUNT(*) FROM information_schema.tables
 WHERE table_schema = %(schema)s AND table_name = %(table)s
