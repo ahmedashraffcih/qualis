@@ -73,3 +73,74 @@ def test_write_round_trips_through_loader(tmp_path: Path) -> None:
     assert rules[1].check == "in_set"
     assert isinstance(rules[1].params, InSetParams)
     assert rules[1].params.values == ["A", "B"]
+
+
+# ---------------------------------------------------------------------------
+# v0.3.0: status + metadata emission
+# ---------------------------------------------------------------------------
+
+
+def test_writer_emits_status_when_not_active() -> None:
+    """status field is only emitted when it differs from the default (active)."""
+    import yaml
+
+    from qualis.discover.suggester import RuleSuggestion
+    from qualis.discover.writer import suggestions_to_yaml
+    from qualis.domain.enums import DQDimension, RuleStatus, RuleType, Severity
+    from qualis.domain.evidence import ProfileEvidence, SuggestionEvidence
+    from qualis.domain.models import Rule
+    from qualis.domain.params import NotNullParams
+
+    rule = Rule(
+        id="r1", name="x",
+        dimension=DQDimension.COMPLETENESS, rule_type=RuleType.AGGREGATE,
+        severity=Severity.CRITICAL, dataset="d", column="c",
+        check="not_null", params=NotNullParams(),
+        status=RuleStatus.NEEDS_EVIDENCE,
+    )
+    profile = ProfileEvidence(
+        total_rows=10, null_count=0, null_fraction=0.0,
+        distinct_count=10, distinct_fraction=1.0,
+        min_value=None, max_value=None, top_values=[],
+    )
+    suggestion = RuleSuggestion(
+        rule=rule, confidence="high",
+        evidence=SuggestionEvidence(
+            profile=profile, heuristic="not_null", heuristic_reason="x",
+        ),
+    )
+    out = yaml.safe_load(suggestions_to_yaml([suggestion]))
+    assert out["rules"][0]["status"] == "needs_evidence"
+
+
+def test_writer_omits_status_when_active() -> None:
+    """Active is the default; emitting it would be noise."""
+    import yaml
+
+    from qualis.discover.suggester import RuleSuggestion
+    from qualis.discover.writer import suggestions_to_yaml
+    from qualis.domain.enums import DQDimension, RuleStatus, RuleType, Severity
+    from qualis.domain.evidence import ProfileEvidence, SuggestionEvidence
+    from qualis.domain.models import Rule
+    from qualis.domain.params import NotNullParams
+
+    rule = Rule(
+        id="r1", name="x",
+        dimension=DQDimension.COMPLETENESS, rule_type=RuleType.AGGREGATE,
+        severity=Severity.CRITICAL, dataset="d", column="c",
+        check="not_null", params=NotNullParams(),
+        status=RuleStatus.ACTIVE,
+    )
+    profile = ProfileEvidence(
+        total_rows=10, null_count=0, null_fraction=0.0,
+        distinct_count=10, distinct_fraction=1.0,
+        min_value=None, max_value=None, top_values=[],
+    )
+    suggestion = RuleSuggestion(
+        rule=rule, confidence="high",
+        evidence=SuggestionEvidence(
+            profile=profile, heuristic="not_null", heuristic_reason="x",
+        ),
+    )
+    out = yaml.safe_load(suggestions_to_yaml([suggestion]))
+    assert "status" not in out["rules"][0]

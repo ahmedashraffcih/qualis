@@ -124,3 +124,74 @@ class TestLoadRulesFromDirectory:
         ids = {r.id for r in rules}
         assert "A-001" in ids
         assert "B-001" in ids
+
+
+# ---------------------------------------------------------------------------
+# v0.3.0: status + metadata round-trip
+# ---------------------------------------------------------------------------
+
+
+def test_loader_reads_status_field(tmp_path: Path) -> None:
+    from qualis.config.loader import load_rules_from_file
+    from qualis.domain.enums import RuleStatus
+
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: r1\n"
+        '    name: "x"\n'
+        "    dimension: completeness\n"
+        "    severity: critical\n"
+        "    dataset: d\n"
+        "    column: c\n"
+        "    check: not_null\n"
+        "    status: needs_evidence\n",
+        encoding="utf-8",
+    )
+    rules = load_rules_from_file(rules_file)
+    assert rules[0].status == RuleStatus.NEEDS_EVIDENCE
+
+
+def test_loader_defaults_status_to_active_when_absent(tmp_path: Path) -> None:
+    from qualis.config.loader import load_rules_from_file
+    from qualis.domain.enums import RuleStatus
+
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: r1\n"
+        '    name: "x"\n'
+        "    dimension: completeness\n"
+        "    severity: critical\n"
+        "    dataset: d\n"
+        "    column: c\n"
+        "    check: not_null\n",
+        encoding="utf-8",
+    )
+    rules = load_rules_from_file(rules_file)
+    assert rules[0].status == RuleStatus.ACTIVE
+
+
+def test_loader_reads_metadata_block(tmp_path: Path) -> None:
+    from qualis.config.loader import load_rules_from_file
+
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: r1\n"
+        '    name: "x"\n'
+        "    dimension: completeness\n"
+        "    severity: critical\n"
+        "    dataset: d\n"
+        "    column: c\n"
+        "    check: not_null\n"
+        "    metadata:\n"
+        "      owner: data-team\n"
+        "      cde: true\n"
+        "      frequency: daily\n",
+        encoding="utf-8",
+    )
+    rules = load_rules_from_file(rules_file)
+    assert rules[0].metadata["owner"] == "data-team"
+    assert rules[0].metadata["cde"] is True
+    assert rules[0].metadata["frequency"] == "daily"

@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 import yaml
 
-from qualis.domain.enums import CheckType, DQDimension, RuleType, Severity
+from qualis.domain.enums import CheckType, DQDimension, RuleStatus, RuleType, Severity
 from qualis.domain.models import Rule
 from qualis.domain.params import (
     BetweenParams,
@@ -136,6 +136,9 @@ def _parse_rule(data: dict[str, Any]) -> Rule:
 
     params = _parse_params(check_str, data.get("parameters"))
 
+    status_str = str(data.get("status", RuleStatus.ACTIVE.value))
+    status = RuleStatus(status_str)
+
     return Rule(
         id=rule_id,
         name=str(data.get("name", "")),
@@ -149,6 +152,8 @@ def _parse_rule(data: dict[str, Any]) -> Rule:
         condition=data.get("condition"),
         description=str(data.get("description", "")),
         tags=list(data.get("tags", [])),
+        status=status,
+        metadata=dict(data.get("metadata") or {}),
     )
 
 

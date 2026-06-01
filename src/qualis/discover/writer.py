@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from qualis.domain.enums import RuleStatus
 from qualis.domain.params import (
     BetweenParams,
     CustomParams,
@@ -61,6 +62,12 @@ def _rule_to_dict(rule: Rule) -> dict[str, Any]:
     params = _params_to_dict(rule.params)
     if params:
         out["parameters"] = params
+    # Only emit status when it differs from the default (ACTIVE) — keeps
+    # generated YAML clean for the common case.
+    if rule.status != RuleStatus.ACTIVE:
+        out["status"] = rule.status.value
+    if rule.metadata:
+        out["metadata"] = dict(rule.metadata)
     return out
 
 
