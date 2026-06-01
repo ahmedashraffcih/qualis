@@ -332,3 +332,90 @@ class TestDiscoverCommand:
             "--batch",
         ])
         assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# v0.3.0: --context flag + qualis review --pending
+# ---------------------------------------------------------------------------
+
+
+def test_discover_respects_context_file(tmp_path: Path) -> None:
+    """--context with declared sentinels excludes them from in_set rules."""
+    import yaml
+
+    csv_file = tmp_path / "data.csv"
+    csv_file.write_text(
+        "id,code\n1,A\n2,B\n3,C\n4,0\n5,A\n", encoding="utf-8",
+    )
+    context_file = tmp_path / "context.yaml"
+    context_file.write_text(
+        "dataset: data\n"
+        "columns:\n"
+        "  code:\n"
+        "    sentinels:\n"
+        "      - value: \"0\"\n"
+        "        meaning: unknown\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "rules.yaml"
+    result = runner.invoke(app, [
+        "discover",
+        "--sample", str(csv_file),
+        "--context", str(context_file),
+        "--output", str(output),
+        "--batch",
+    ])
+    assert result.exit_code == 0
+    parsed = yaml.safe_load(output.read_text())
+    in_set_rules = [r for r in parsed["rules"] if r["check"] == "in_set"]
+    if in_set_rules:
+        for rule in in_set_rules:
+            assert "0" not in rule.get("parameters", {}).get("values", [])
+
+
+def test_review_pending_lists_needs_evidence_rules(tmp_path: Path) -> None:
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: r1\n"
+        '    name: "active rule"\n'
+        "    dimension: completeness\n"
+        "    severity: critical\n"
+        "    dataset: d\n"
+        "    column: c\n"
+        "    check: not_null\n"
+        "  - id: r2\n"
+        '    name: "pending rule"\n'
+        "    dimension: validity\n"
+        "    severity: warning\n"
+        "    dataset: d\n"
+        "    column: c\n"
+        "    check: not_null\n"
+        "    status: needs_evidence\n"
+        "    metadata:\n"
+        '      needs_evidence_reason: "confirm with data owner"\n',
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["review", "--pending", "--rules", str(rules_file)])
+    assert result.exit_code == 0
+    assert "r1" not in result.output
+    assert "r2" in result.output
+    assert "confirm with data owner" in result.output
+
+
+def test_review_pending_empty_when_no_pending_rules(tmp_path: Path) -> None:
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: r1\n"
+        '    name: "active rule"\n'
+        "    dimension: completeness\n"
+        "    severity: critical\n"
+        "    dataset: d\n"
+        "    column: c\n"
+        "    check: not_null\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(app, ["review", "--pending", "--rules", str(rules_file)])
+    assert result.exit_code == 0
+    assert "0 pending" in result.output.lower() or "no pending" in result.output.lower()

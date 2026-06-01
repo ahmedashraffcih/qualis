@@ -488,6 +488,16 @@ def discover(
         "--batch",
         help="Accept all suggestions without prompting (for CI).",
     ),
+    context: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--context",
+        "-c",
+        help=(
+            "Path to a context.yaml file declaring sentinels, exceptions, "
+            "and business grain. When provided, declared sentinels are "
+            "excluded from in_set suggestions."
+        ),
+    ),
 ) -> None:
     """Profile data and suggest DQ rules — review interactively or in batch.
 
@@ -495,6 +505,8 @@ def discover(
     are pure heuristics over observed statistics — review them carefully
     before promoting to production rules.
     """
+    import dataclasses as _dc
+
     from qualis.adapters.duckdb.adapter import DuckDBAdapter
     from qualis.discover.profiler import profile_table
     from qualis.discover.suggester import suggest_rules
@@ -503,6 +515,16 @@ def discover(
     if not sample.is_file():
         console.print(f"[red]Error:[/] Sample path '[cyan]{sample}[/]' is not a file.")
         raise typer.Exit(1)
+
+    # Optionally load DatasetContext so the suggester skips declared sentinels.
+    context_obj = None
+    if context is not None:
+        from qualis.config.context_loader import load_context_from_file
+        try:
+            context_obj = load_context_from_file(context)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[red]Error loading context:[/] {exc}")
+            raise typer.Exit(1) from exc
 
     table_name = table or sample.stem
     adapter = DuckDBAdapter()
@@ -520,7 +542,7 @@ def discover(
         f"  [dim]→ {profile.row_count} rows, {len(profile.columns)} columns[/]\n"
     )
 
-    suggestions = suggest_rules(profile)
+    suggestions = suggest_rules(profile, context=context_obj)
     if not suggestions:
         console.print("[yellow]No suggestions generated — try a richer sample.[/]")
         raise typer.Exit(0)
@@ -531,24 +553,53 @@ def discover(
         for s in accepted:
             console.print(f"  [green]✓[/] {s.rule.id}  [dim]({s.confidence})[/]")
     else:
+        from qualis.review.state_machine import send_back as _send_back
         for i, s in enumerate(suggestions, 1):
+            ev = s.evidence
+            prof = ev.profile
             console.print(
                 f"\n[bold]({i}/{len(suggestions)})[/] "
                 f"Suggested: [cyan]{s.rule.dataset}.{s.rule.column}[/] · "
-                f"[magenta]{s.rule.check}[/]"
+                f"[magenta]{s.rule.check}[/] · "
+                f"Confidence: [bold]{s.confidence}[/]"
             )
-            if isinstance(s.rule.params, type(s.rule.params)) and s.rule.params.__dict__:
+            console.print(
+                f"  Rule: [dim]{s.rule.name}[/]  "
+                f"(dimension: [cyan]{s.rule.dimension.value}[/], "
+                f"severity: [cyan]{s.rule.severity.value}[/])"
+            )
+            if s.rule.params.__dict__:
                 console.print(f"  Parameters: [dim]{s.rule.params}[/]")
             console.print(
-                f"  Dimension: [cyan]{s.rule.dimension.value}[/] · "
-                f"Confidence: [magenta]{s.confidence}[/] · "
-                f"[dim]{s.rationale}[/]"
+                f"  Profile: [dim]"
+                f"{prof.total_rows} rows, "
+                f"{prof.null_count} null ({prof.null_fraction:.1%}), "
+                f"{prof.distinct_count} distinct "
+                f"({prof.distinct_fraction:.1%}), "
+                f"range [{prof.min_value or 'n/a'}, {prof.max_value or 'n/a'}]"
+                f"[/]"
             )
-            choice = typer.prompt("Accept (y), Skip (n), Quit (q)?", default="n").strip().lower()
+            console.print(f"  Why: [dim]{ev.heuristic_reason}[/]")
+            if ev.sentinels_consulted:
+                console.print(
+                    f"  Sentinels consulted: [yellow]{', '.join(ev.sentinels_consulted)}[/]"
+                )
+            choice = typer.prompt(
+                "Accept (y), Reject (n), Send back (b), Quit (q)?",
+                default="n",
+            ).strip().lower()
             if choice == "q":
                 break
             if choice == "y":
                 accepted.append(s)
+            elif choice == "b":
+                # Capture reason and transition via the state machine.
+                reason = typer.prompt(
+                    "Send back reason", default="needs context",
+                ).strip()
+                new_rule = _send_back(s.rule, reason=reason)
+                accepted.append(_dc.replace(s, rule=new_rule))
+            # 'n' or anything else: skip
 
     if not accepted:
         console.print("\n[yellow]No suggestions accepted.[/]")
@@ -560,3 +611,9 @@ def discover(
     )
     # Use the actual output path (file or dir) — `--rules` now accepts either.
     console.print(f"  Run [bold]qualis validate --rules {output}[/] to verify.")
+
+
+# Register the review command (lives in its own module to keep main.py focused).
+from qualis.cli.review_cmd import review as _review_cmd  # noqa: E402
+
+app.command(name="review")(_review_cmd)
