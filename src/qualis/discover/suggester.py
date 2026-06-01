@@ -6,6 +6,12 @@ Generates DQ rule suggestions using statistical observations:
 - in_set when low-cardinality (<= 10 distinct)
 - between when numeric/date with observed min/max
 - not_negative when numeric with min >= 0
+
+The suggester optionally consults a DatasetContext to skip declared
+sentinels (e.g., 0 = "unknown" in some tables) and exceptions. Without
+context, behaviour matches v0.2.x — useful for backwards compatibility
+but the practitioner warning applies: ungrounded rules can be
+"confidently wrong at scale."
 """
 
 from __future__ import annotations
@@ -13,7 +19,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from qualis.discover.evidence_builder import build_profile_evidence
+from qualis.domain.context import EMPTY_CONTEXT, DatasetContext
 from qualis.domain.enums import DQDimension, RuleType, Severity
+from qualis.domain.evidence import SuggestionEvidence
 from qualis.domain.models import Rule
 from qualis.domain.params import (
     BetweenParams,
@@ -34,9 +43,20 @@ _NUMERIC_TYPES = frozenset({"integer", "float"})
 
 @dataclass(frozen=True)
 class RuleSuggestion:
+    """One rule suggestion with its supporting evidence.
+
+    The evidence is the source of truth — ``rationale`` is a derived
+    property that returns ``evidence.heuristic_reason`` for backwards
+    compatibility with existing callers.
+    """
+
     rule: Rule
     confidence: Confidence
-    rationale: str
+    evidence: SuggestionEvidence
+
+    @property
+    def rationale(self) -> str:
+        return self.evidence.heuristic_reason
 
 
 def _rule_id(dataset: str, column: str | None, check: str) -> str:
@@ -44,19 +64,48 @@ def _rule_id(dataset: str, column: str | None, check: str) -> str:
     return f"DQ-{check.upper()}-{dataset}-{col_part}"
 
 
-def suggest_rules(profile: TableProfile) -> list[RuleSuggestion]:
-    """Generate deterministic rule suggestions from a table profile."""
+def _evidence(
+    col: ColumnProfile,
+    heuristic: str,
+    reason: str,
+    sentinels_consulted: list[str] | None = None,
+    exceptions_consulted: list[str] | None = None,
+) -> SuggestionEvidence:
+    return SuggestionEvidence(
+        profile=build_profile_evidence(col, top_values=[]),
+        heuristic=heuristic,
+        heuristic_reason=reason,
+        sentinels_consulted=sentinels_consulted or [],
+        exceptions_consulted=exceptions_consulted or [],
+    )
+
+
+def suggest_rules(
+    profile: TableProfile,
+    context: DatasetContext | None = None,
+) -> list[RuleSuggestion]:
+    """Generate deterministic rule suggestions from a table profile.
+
+    ``context`` (optional) holds user-declared sentinels and exceptions
+    that the suggester should respect. When absent, the suggester
+    behaves exactly as in v0.2.x — useful for backwards compatibility
+    but reviewers should treat the output as ungrounded.
+    """
+    ctx = context if context is not None else EMPTY_CONTEXT
     suggestions: list[RuleSuggestion] = []
-    dataset = profile.table
-
     for col in profile.columns:
-        suggestions.extend(_suggest_for_column(dataset, col))
-
+        suggestions.extend(_suggest_for_column(profile.table, col, ctx))
     return suggestions
 
 
-def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion]:
+def _suggest_for_column(
+    dataset: str,
+    col: ColumnProfile,
+    ctx: DatasetContext,
+) -> list[RuleSuggestion]:
     out: list[RuleSuggestion] = []
+    column_ctx = ctx.get_column(col.name)
+    sentinel_values = {s.value for s in column_ctx.sentinels}
 
     if col.total_count > 0 and col.null_count == 0:
         # ID-like columns are nearly always business-required; treat them as critical.
@@ -76,7 +125,9 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
                     params=NotNullParams(),
                 ),
                 confidence="high",
-                rationale=f"0 nulls observed in {col.total_count} rows",
+                evidence=_evidence(
+                    col, "not_null", f"0 nulls observed in {col.total_count} rows",
+                ),
             )
         )
 
@@ -100,9 +151,10 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
                     params=UniqueParams(),
                 ),
                 confidence=confidence,
-                rationale=(
+                evidence=_evidence(
+                    col, "unique",
                     f"distinct/{non_null} non-null rows = {col.distinct_fraction:.0%}; "
-                    f"name suggests identifier"
+                    "name suggests identifier",
                 ),
             )
         )
@@ -112,32 +164,40 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
         and 0 < col.distinct_count <= _LOW_CARDINALITY_THRESHOLD
         and col.sample_values
     ):
-        out.append(
-            RuleSuggestion(
-                rule=Rule(
-                    id=_rule_id(dataset, col.name, "in_set"),
-                    name=f"{col.name} must be one of the observed values",
-                    dimension=DQDimension.VALIDITY,
-                    rule_type=RuleType.AGGREGATE,
-                    severity=Severity.WARNING,
-                    dataset=dataset,
-                    column=col.name,
-                    check="in_set",
-                    params=InSetParams(values=list(col.sample_values)),
-                ),
-                # Confidence is MEDIUM — we know only what we observed, not the
-                # authoritative valid domain. A new code added next week would
-                # break this rule. Reviewer should verify against the source of
-                # truth (data catalog, reference data, domain owner) before
-                # accepting. Sentinels (0 = unknown, etc.) are NOT detected
-                # by this heuristic and will be silently codified as "valid".
-                confidence="medium",
-                rationale=(
-                    f"{col.distinct_count} distinct values observed in profiled data — "
-                    "verify against the authoritative valid domain before accepting"
-                ),
+        # Skip declared sentinels — they are valid placeholders the data
+        # itself cannot resolve. The practitioner case: 0 = "unknown" in
+        # some tables, invalid in others. Codifying it as "valid" via
+        # in_set ships the failure mode at scale.
+        filtered_values = [v for v in col.sample_values if v not in sentinel_values]
+        consulted = sorted(sentinel_values & set(col.sample_values))
+        if filtered_values:
+            out.append(
+                RuleSuggestion(
+                    rule=Rule(
+                        id=_rule_id(dataset, col.name, "in_set"),
+                        name=f"{col.name} must be one of the observed values",
+                        dimension=DQDimension.VALIDITY,
+                        rule_type=RuleType.AGGREGATE,
+                        severity=Severity.WARNING,
+                        dataset=dataset,
+                        column=col.name,
+                        check="in_set",
+                        params=InSetParams(values=filtered_values),
+                    ),
+                    # MEDIUM confidence: we know only what we observed, not
+                    # the authoritative valid domain. New codes added next
+                    # week would break this rule. Reviewer must verify
+                    # against source of truth (data catalog, reference data,
+                    # domain owner) before accepting.
+                    confidence="medium",
+                    evidence=_evidence(
+                        col, "in_set",
+                        f"{col.distinct_count} distinct values observed in profiled data — "
+                        "verify against the authoritative valid domain before accepting",
+                        sentinels_consulted=consulted,
+                    ),
+                )
             )
-        )
 
     if (
         col.inferred_type in _NUMERIC_TYPES or col.inferred_type == "date"
@@ -156,7 +216,10 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
                     params=BetweenParams(min=col.min_value, max=col.max_value),
                 ),
                 confidence="medium",
-                rationale=f"observed range [{col.min_value}, {col.max_value}]",
+                evidence=_evidence(
+                    col, "between",
+                    f"observed range [{col.min_value}, {col.max_value}]",
+                ),
             )
         )
 
@@ -177,7 +240,10 @@ def _suggest_for_column(dataset: str, col: ColumnProfile) -> list[RuleSuggestion
                             params=NotNegativeParams(),
                         ),
                         confidence="medium",
-                        rationale=f"all observed values are >= 0 (min = {col.min_value})",
+                        evidence=_evidence(
+                            col, "not_negative",
+                            f"all observed values are >= 0 (min = {col.min_value})",
+                        ),
                     )
                 )
         except (ValueError, TypeError):

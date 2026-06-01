@@ -6,6 +6,7 @@ from qualis.config.loader import load_rules_from_directory
 from qualis.discover.suggester import RuleSuggestion
 from qualis.discover.writer import suggestions_to_yaml, write_suggestions
 from qualis.domain.enums import DQDimension, RuleType, Severity
+from qualis.domain.evidence import ProfileEvidence, SuggestionEvidence
 from qualis.domain.models import Rule
 from qualis.domain.params import InSetParams, NotNullParams
 
@@ -27,7 +28,15 @@ def _suggestion(check: str, params: object, column: str = "col") -> RuleSuggesti
             params=params,  # type: ignore[arg-type]
         ),
         confidence="high",
-        rationale="test",
+        evidence=SuggestionEvidence(
+            profile=ProfileEvidence(
+                total_rows=10, null_count=0, null_fraction=0.0,
+                distinct_count=10, distinct_fraction=1.0,
+                min_value=None, max_value=None, top_values=[],
+            ),
+            heuristic=check,
+            heuristic_reason="test",
+        ),
     )
 
 

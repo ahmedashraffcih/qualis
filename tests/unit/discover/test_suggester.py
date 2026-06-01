@@ -166,3 +166,103 @@ def test_dimension_assignment() -> None:
 
 def test_no_suggestions_for_empty_profile() -> None:
     assert suggest_rules(_profile([])) == []
+
+
+# ---------------------------------------------------------------------------
+# v0.3.0: SuggestionEvidence + DatasetContext
+# ---------------------------------------------------------------------------
+
+
+def test_suggestion_carries_evidence_object() -> None:
+    """SuggestionEvidence is the source of truth; rationale is derived."""
+    from qualis.domain.evidence import SuggestionEvidence
+    cols = [_col(name="email", null_count=0, total_count=10)]
+    suggestion = next(
+        s for s in suggest_rules(_profile(cols)) if s.rule.check == "not_null"
+    )
+    assert isinstance(suggestion.evidence, SuggestionEvidence)
+    assert suggestion.evidence.profile.total_rows == 10
+    assert suggestion.evidence.heuristic == "not_null"
+
+
+def test_rationale_derived_from_evidence() -> None:
+    """The old .rationale property still works for callers."""
+    cols = [_col(name="email", null_count=0, total_count=10)]
+    suggestion = next(
+        s for s in suggest_rules(_profile(cols)) if s.rule.check == "not_null"
+    )
+    assert suggestion.rationale == suggestion.evidence.heuristic_reason
+
+
+def test_suggest_rules_accepts_optional_context() -> None:
+    """Backwards-compat: calling without a context still works."""
+    cols = [_col(name="email", null_count=0, total_count=10)]
+    suggestions = suggest_rules(_profile(cols))
+    assert len(suggestions) > 0
+
+
+def test_in_set_excludes_declared_sentinels() -> None:
+    from qualis.domain.context import ColumnContext, DatasetContext, SentinelDeclaration
+    from qualis.domain.params import InSetParams
+
+    cols = [
+        _col(
+            name="code",
+            inferred_type="string",
+            distinct_count=4,
+            sample_values=["0", "A", "B", "C"],
+        )
+    ]
+    ctx = DatasetContext(
+        dataset="t",
+        columns={
+            "code": ColumnContext(
+                column="code",
+                sentinels=[SentinelDeclaration(value="0", meaning="unknown")],
+            ),
+        },
+    )
+    suggestions = suggest_rules(_profile(cols), context=ctx)
+    in_set = next(s for s in suggestions if s.rule.check == "in_set")
+    assert isinstance(in_set.rule.params, InSetParams)
+    assert "0" not in in_set.rule.params.values
+    assert in_set.rule.params.values == ["A", "B", "C"]
+
+
+def test_in_set_records_consulted_sentinels_in_evidence() -> None:
+    from qualis.domain.context import ColumnContext, DatasetContext, SentinelDeclaration
+
+    cols = [
+        _col(
+            name="code",
+            inferred_type="string",
+            distinct_count=4,
+            sample_values=["0", "A", "B", "C"],
+        )
+    ]
+    ctx = DatasetContext(
+        dataset="t",
+        columns={
+            "code": ColumnContext(
+                column="code",
+                sentinels=[SentinelDeclaration(value="0", meaning="unknown")],
+            ),
+        },
+    )
+    in_set = next(
+        s for s in suggest_rules(_profile(cols), context=ctx) if s.rule.check == "in_set"
+    )
+    assert "0" in in_set.evidence.sentinels_consulted
+
+
+def test_no_context_means_no_sentinels_consulted() -> None:
+    cols = [
+        _col(
+            name="status",
+            inferred_type="string",
+            distinct_count=3,
+            sample_values=["A", "B", "C"],
+        )
+    ]
+    in_set = next(s for s in suggest_rules(_profile(cols)) if s.rule.check == "in_set")
+    assert in_set.evidence.sentinels_consulted == []
