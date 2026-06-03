@@ -11,6 +11,26 @@ requires-python = ">=3.12"
 authors = [
     { name = "Ahmed Ashraf", email = "ahmedashraffcih@gmail.com" },
 ]
+keywords = [
+    "data-quality", "dq", "data-validation", "data-testing",
+    "dama", "dmbok", "data-governance", "great-expectations-alternative",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
 dependencies = [
     "duckdb>=1.0",
     "jinja2>=3.1",
@@ -26,6 +46,13 @@ postgres = ["psycopg[binary]>=3.1", "psycopg-pool>=3.1"]
 
 [project.scripts]
 qualis = "qualis.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/ahmedashraffcih/qualis"
+Documentation = "https://github.com/ahmedashraffcih/qualis#readme"
+Repository = "https://github.com/ahmedashraffcih/qualis"
+Issues = "https://github.com/ahmedashraffcih/qualis/issues"
+Changelog = "https://github.com/ahmedashraffcih/qualis/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/qualis"]
