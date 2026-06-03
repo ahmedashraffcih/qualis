@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.1 (2026-06-03)
+
+First PyPI release — no behaviour changes from v0.3.0. Adds PyPI metadata
+(classifiers, keywords, project URLs), the tag-driven release workflow with
+OIDC trusted publishing, CI on Python 3.12/3.13, and contributor docs.
+
 ## v0.3.0 (2026-06-02) — Trust scaffolding
 
 Informed by feedback from a live-delivery practitioner: "generation is the
