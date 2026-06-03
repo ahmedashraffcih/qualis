@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build artefacts
+        run: uv build
+
+      - name: Verify version matches tag
+        run: |
+          VERSION_IN_PYPROJECT=$(grep '^version = ' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ "$VERSION_IN_PYPROJECT" != "$TAG_VERSION" ]; then
+            echo "Version mismatch: pyproject.toml says '$VERSION_IN_PYPROJECT', tag is '$TAG_VERSION'"
+            exit 1
+          fi
+          echo "Version $VERSION_IN_PYPROJECT matches tag v$TAG_VERSION"
+
+      - name: Upload artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/qualis
+    permissions:
+      id-token: write   # IMPORTANT: required for trusted publishing
+    steps:
+      - name: Download artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
