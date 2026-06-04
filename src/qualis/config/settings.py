@@ -18,3 +18,7 @@ class QualisSettings(BaseSettings):
     dry_run: bool = False
     redact_actual_value: bool = False
     allow_custom: bool = False
+    # Server-side per-statement timeout for check queries, in milliseconds.
+    # Applied by adapters that support it (Postgres via SET LOCAL); DuckDB
+    # has no per-statement timeout and ignores this. None = server default.
+    statement_timeout_ms: int | None = None

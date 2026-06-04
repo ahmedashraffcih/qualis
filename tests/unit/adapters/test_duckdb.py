@@ -117,3 +117,34 @@ def test_check_reference_lookup_all_valid(adapter: DuckDBAdapter) -> None:
         valid_values=["FATAL", "SERIOUS", "MINOR", "PROPERTY", "INVALID"],
     )
     assert result["invalid_count"] == 0
+
+
+class TestFetchViolationSamples:
+    """Optional sampling capability: real failing rows as evidence."""
+
+    def test_in_set_returns_invalid_value_with_rid(self, adapter: DuckDBAdapter) -> None:
+        samples = adapter.fetch_violation_samples(
+            "", "accidents", "severity_code", "in_set",
+            {"values": ["FATAL", "SERIOUS", "MINOR", "PROPERTY"]}, 10,
+        )
+        assert len(samples) == 1
+        assert samples[0]["actual_value"] == "INVALID"
+        assert samples[0]["record_id"] is not None
+
+    def test_not_null_returns_null_row(self, adapter: DuckDBAdapter) -> None:
+        samples = adapter.fetch_violation_samples(
+            "", "accidents", "accident_date", "not_null", {}, 10,
+        )
+        assert len(samples) == 1
+        assert samples[0]["actual_value"] is None
+
+    def test_unique_returns_duplicated_rows_capped(self, adapter: DuckDBAdapter) -> None:
+        samples = adapter.fetch_violation_samples(
+            "", "accidents", "id", "unique", {}, 1,
+        )
+        assert len(samples) == 1  # limit respected
+        assert samples[0]["actual_value"] == 1
+
+    def test_unsupported_kind_raises(self, adapter: DuckDBAdapter) -> None:
+        with pytest.raises(ValueError, match="unsupported sample kind"):
+            adapter.fetch_violation_samples("", "accidents", "id", "row_count", {}, 5)

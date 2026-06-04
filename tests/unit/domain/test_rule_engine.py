@@ -371,3 +371,75 @@ class TestBoundedViolations:
         assert not result.passed
         assert result.violations[0].actual_value == 4
         assert "row count between 10 and 100" in result.violations[0].expected
+
+
+class TestSampledViolations:
+    """--sample-rows: real row evidence via the optional adapter capability."""
+
+    def test_in_set_samples_carry_real_value_and_record_id(
+        self, adapter: InMemoryAdapter
+    ) -> None:
+        engine = RuleEngine(adapter, schema=SCHEMA, sample_rows=5)
+        rule = _make_rule(
+            check="in_set",
+            column="code",
+            params=InSetParams(values=["AB-123", "AB-456", "CD-789"]),
+        )
+        result = engine.evaluate_rule(rule)
+        assert result.violation_count == 1
+        assert len(result.violations) == 1
+        violation = result.violations[0]
+        assert violation.actual_value == "INVALID"
+        assert violation.record_id == "2"  # zero-based row index in the fixture
+
+    def test_sample_rows_caps_evidence_size(self) -> None:
+        db = InMemoryAdapter()
+        db.add_table(
+            SCHEMA,
+            TABLE,
+            [{"code": "BAD-1"}, {"code": "BAD-2"}, {"code": "BAD-3"}],
+        )
+        engine = RuleEngine(db, schema=SCHEMA, sample_rows=2)
+        rule = _make_rule(
+            check="in_set", column="code", params=InSetParams(values=["GOOD"])
+        )
+        result = engine.evaluate_rule(rule)
+        assert result.violation_count == 3  # authoritative
+        assert len(result.violations) == 2  # capped by sample_rows
+        assert {v.actual_value for v in result.violations} <= {"BAD-1", "BAD-2", "BAD-3"}
+
+    def test_adapter_without_capability_keeps_placeholder(self) -> None:
+        engine = RuleEngine(_HugeCountAdapter(), schema=SCHEMA, sample_rows=5)
+        rule = _make_rule(check="not_null", column="value", params=NotNullParams())
+        result = engine.evaluate_rule(rule)
+        assert result.violation_count == 1_000_000
+        assert len(result.violations) == 1
+        assert result.violations[0].record_id is None  # placeholder, not a sample
+
+    def test_no_sample_rows_keeps_placeholder(self, adapter: InMemoryAdapter) -> None:
+        engine = RuleEngine(adapter, schema=SCHEMA)  # sample_rows not given
+        rule = _make_rule(
+            check="in_set",
+            column="code",
+            params=InSetParams(values=["AB-123", "AB-456", "CD-789"]),
+        )
+        result = engine.evaluate_rule(rule)
+        assert len(result.violations) == 1
+        assert result.violations[0].record_id is None
+
+    def test_sampling_error_falls_back_to_placeholder(self) -> None:
+        class _BrokenSampler:
+            def check_not_null(self, schema: str, table: str, column: str) -> dict[str, int]:
+                return {"null_count": 3, "total_count": 10}
+
+            def fetch_violation_samples(
+                self, *args: object, **kwargs: object
+            ) -> list[dict[str, object]]:
+                raise RuntimeError("sampling backend exploded")
+
+        engine = RuleEngine(_BrokenSampler(), schema=SCHEMA, sample_rows=5)
+        rule = _make_rule(check="not_null", column="value", params=NotNullParams())
+        result = engine.evaluate_rule(rule)
+        assert result.violation_count == 3  # check result unaffected
+        assert len(result.violations) == 1
+        assert result.violations[0].record_id is None  # placeholder fallback

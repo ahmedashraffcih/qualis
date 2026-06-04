@@ -35,6 +35,12 @@ class DuckDBAdapter:
     database:
         Path to a persistent DuckDB file, or ``":memory:"`` (default) for an
         in-process, session-only database.
+
+    Notes
+    -----
+    DuckDB has no per-statement timeout, so ``QualisSettings.statement_timeout_ms``
+    does not apply here. For runaway-query protection use OS-level limits or
+    run checks against a remote engine that supports timeouts (e.g. Postgres).
     """
 
     def __init__(self, database: str = ":memory:") -> None:
@@ -198,6 +204,72 @@ class DuckDBAdapter:
         row = self._con.execute(sql).fetchone()
         invalid, total = (row[0], row[1]) if row else (0, 0)
         return {"invalid_count": int(invalid), "total_count": int(total)}
+
+    def fetch_violation_samples(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        kind: str,
+        params: dict[str, Any],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Optional capability: return up to *limit* failing rows as evidence.
+
+        Each predicate mirrors the corresponding check template in
+        ``sql_templates`` so sampled rows are members of the counted set.
+        ``record_id`` is a 1-based row number (works on registered CSV /
+        parquet views, where ``rowid`` does not exist).
+        """
+
+        def esc(value: str) -> str:
+            return value.replace("'", "''")
+
+        def value_list(values: list[str]) -> str:
+            return ", ".join(f"'{esc(v)}'" for v in values) or "NULL"
+
+        table_ref = _qualified(schema, table)
+        if kind == "not_null":
+            predicate = "actual_value IS NULL"
+        elif kind == "unique":
+            predicate = (
+                "actual_value IS NOT NULL AND actual_value IN ("
+                f'SELECT "{column}" FROM {table_ref} '
+                f'WHERE "{column}" IS NOT NULL '
+                f'GROUP BY "{column}" HAVING COUNT(*) > 1)'
+            )
+        elif kind == "between":
+            predicate = (
+                f"CAST(actual_value AS VARCHAR) < '{esc(params['min'])}' "
+                f"OR CAST(actual_value AS VARCHAR) > '{esc(params['max'])}'"
+            )
+        elif kind == "regex":
+            predicate = (
+                "actual_value IS NULL OR NOT regexp_matches("
+                f"CAST(actual_value AS VARCHAR), '{esc(params['pattern'])}')"
+            )
+        elif kind == "in_set":
+            predicate = (
+                "actual_value IS NULL OR CAST(actual_value AS VARCHAR) "
+                f"NOT IN ({value_list(params['values'])})"
+            )
+        elif kind == "not_negative":
+            predicate = "actual_value IS NOT NULL AND actual_value < 0"
+        elif kind == "reference_lookup":
+            predicate = (
+                "actual_value IS NOT NULL AND CAST(actual_value AS VARCHAR) "
+                f"NOT IN ({value_list(params['valid_values'])})"
+            )
+        else:
+            raise ValueError(f"unsupported sample kind: {kind!r}")
+
+        sql = (
+            "SELECT actual_value, rid FROM ("
+            f'SELECT "{column}" AS actual_value, row_number() OVER () AS rid '
+            f"FROM {table_ref}) q WHERE {predicate} LIMIT {int(limit)}"
+        )
+        rows = self._con.execute(sql).fetchall()
+        return [{"actual_value": r[0], "record_id": r[1]} for r in rows]
 
     # ------------------------------------------------------------------
     # Lifecycle

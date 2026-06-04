@@ -226,3 +226,100 @@ class TestPostgresAdapterWithMock:
 
         result = adapter.execute("DELETE FROM users WHERE active = false")
         assert result == 3
+
+
+class TestStatementTimeout:
+    """PR 2 runtime guard: SET LOCAL statement_timeout per check connection."""
+
+    def _adapter_with_mock_pool(self, timeout_ms: int | None):
+        from unittest.mock import MagicMock
+
+        from qualis.adapters.postgres.adapter import PostgresAdapter
+
+        mock_pool = MagicMock()
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = (0, 0)
+
+        mock_pool.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        adapter = PostgresAdapter.__new__(PostgresAdapter)
+        adapter._pool = mock_pool  # type: ignore[attr-defined]
+        adapter._statement_timeout_ms = timeout_ms  # type: ignore[attr-defined]
+        return adapter, mock_conn
+
+    def test_check_emits_set_local_timeout_when_configured(self) -> None:
+        adapter, mock_conn = self._adapter_with_mock_pool(timeout_ms=1500)
+        adapter.check_not_null("public", "users", "email")
+        executed = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
+        assert any("SET TRANSACTION READ ONLY" in s for s in executed)
+        assert any("SET LOCAL statement_timeout = '1500ms'" in s for s in executed)
+
+    def test_check_omits_timeout_when_not_configured(self) -> None:
+        adapter, mock_conn = self._adapter_with_mock_pool(timeout_ms=None)
+        adapter.check_not_null("public", "users", "email")
+        executed = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
+        assert any("SET TRANSACTION READ ONLY" in s for s in executed)
+        assert not any("statement_timeout" in s for s in executed)
+
+    @pytest.mark.skipif(not _PSYCOPG_INSTALLED, reason="psycopg not installed")
+    def test_init_accepts_statement_timeout_kwarg(self) -> None:
+        import inspect
+
+        from qualis.adapters.postgres.adapter import PostgresAdapter
+
+        sig = inspect.signature(PostgresAdapter.__init__)
+        assert "statement_timeout_ms" in sig.parameters
+
+
+class TestFetchViolationSamples:
+    """Optional sampling capability — mock-based, no live server."""
+
+    def _adapter(self):
+        from unittest.mock import MagicMock
+
+        from qualis.adapters.postgres.adapter import PostgresAdapter
+
+        mock_pool = MagicMock()
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = [("INVALID", "(0,3)")]
+
+        mock_pool.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        adapter = PostgresAdapter.__new__(PostgresAdapter)
+        adapter._pool = mock_pool  # type: ignore[attr-defined]
+        adapter._statement_timeout_ms = None  # type: ignore[attr-defined]
+        return adapter, mock_cur
+
+    def test_in_set_uses_any_param_and_ctid(self) -> None:
+        adapter, mock_cur = self._adapter()
+        samples = adapter.fetch_violation_samples(
+            "public", "accidents", "severity_code", "in_set",
+            {"values": ["FATAL", "MINOR"]}, 5,
+        )
+        sql, bind = mock_cur.execute.call_args.args
+        assert "ctid::text" in sql
+        assert "= ANY(%(values)s)" in sql
+        assert "LIMIT %(limit)s" in sql
+        assert bind["values"] == ["FATAL", "MINOR"]
+        assert bind["limit"] == 5
+        assert samples == [{"actual_value": "INVALID", "record_id": "(0,3)"}]
+
+    def test_runs_inside_read_only_transaction(self) -> None:
+        adapter, _ = self._adapter()
+        mock_conn = adapter._pool.connection.return_value.__enter__.return_value  # type: ignore[attr-defined]
+        adapter.fetch_violation_samples("public", "t", "c", "not_null", {}, 3)
+        executed = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
+        assert any("SET TRANSACTION READ ONLY" in s for s in executed)
+
+    def test_unsupported_kind_raises(self) -> None:
+        adapter, _ = self._adapter()
+        with pytest.raises(ValueError, match="unsupported sample kind"):
+            adapter.fetch_violation_samples("public", "t", "c", "row_count", {}, 3)

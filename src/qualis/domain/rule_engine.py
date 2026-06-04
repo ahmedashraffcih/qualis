@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from qualis.domain.enums import CheckType
@@ -17,6 +18,8 @@ from qualis.domain.params import (
     RowCountParams,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class RuleEngine:
     """Dispatches ``Rule`` objects to the appropriate adapter check method.
@@ -31,10 +34,15 @@ class RuleEngine:
         adapter: Any,
         schema: str,
         reference_data: Any = None,
+        sample_rows: int | None = None,
     ) -> None:
         self._adapter = adapter
         self._schema = schema
         self._reference_data = reference_data
+        # When set AND the adapter exposes the optional
+        # ``fetch_violation_samples`` capability, failing checks attach up to
+        # min(sample_rows, MAX_SAMPLE_VIOLATIONS) real rows as evidence.
+        self._sample_rows = sample_rows
 
     # ------------------------------------------------------------------
     # Public API
@@ -88,15 +96,58 @@ class RuleEngine:
         *,
         expected: str,
         actual_value: Any = None,
+        kind: str | None = None,
+        sql_params: dict[str, Any] | None = None,
     ) -> list[Violation]:
         """Build the bounded violations sample for a failing check.
 
-        Count-only stage: adapters report counts, not rows, so the sample is
-        a single representative placeholder. ``CheckResult.violation_count``
-        remains authoritative. The slice keeps the sample within
-        ``MAX_SAMPLE_VIOLATIONS`` once richer producers (``--sample-rows``)
-        fill this list with real rows.
+        When sampling is requested (``sample_rows``), the check names its
+        *kind*, and the adapter exposes the optional
+        ``fetch_violation_samples`` capability, the sample holds up to
+        ``min(sample_rows, MAX_SAMPLE_VIOLATIONS)`` real failing rows
+        (``record_id``/``actual_value`` populated). Otherwise — including on
+        a sampling error, which is logged, never raised — the sample is a
+        single representative placeholder. ``CheckResult.violation_count``
+        remains authoritative either way.
         """
+        if (
+            self._sample_rows
+            and kind is not None
+            and hasattr(self._adapter, "fetch_violation_samples")
+        ):
+            schema, table = self._dataset_parts(rule)
+            limit = min(self._sample_rows, MAX_SAMPLE_VIOLATIONS)
+            try:
+                rows = self._adapter.fetch_violation_samples(
+                    schema,
+                    table,
+                    rule.column or "",
+                    kind,
+                    sql_params or {},
+                    limit,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "violation sampling failed for rule %s (%s); "
+                    "falling back to placeholder sample",
+                    rule.id,
+                    exc,
+                )
+            else:
+                if rows:
+                    return [
+                        Violation(
+                            rule=rule,
+                            record_id=(
+                                str(r["record_id"])
+                                if r.get("record_id") is not None
+                                else None
+                            ),
+                            actual_value=r.get("actual_value"),
+                            expected=expected,
+                        )
+                        for r in rows[:limit]
+                    ]
         return [
             Violation(
                 rule=rule,
@@ -113,7 +164,9 @@ class RuleEngine:
         null_count = result.get("null_count", 0)
         total = result.get("total_count", 0)
         violations = (
-            self._sample(rule, expected="non-null value") if null_count else []
+            self._sample(rule, expected="non-null value", kind="not_null")
+            if null_count
+            else []
         )
         return CheckResult(
             rule=rule,
@@ -130,7 +183,9 @@ class RuleEngine:
         dup_count = result.get("duplicate_count", 0)
         total = result.get("total_count", 0)
         violations = (
-            self._sample(rule, expected="unique value") if dup_count else []
+            self._sample(rule, expected="unique value", kind="unique")
+            if dup_count
+            else []
         )
         return CheckResult(
             rule=rule,
@@ -152,7 +207,12 @@ class RuleEngine:
         out_count = result.get("out_of_range_count", 0)
         total = result.get("total_count", 0)
         violations = (
-            self._sample(rule, expected=f"between {params.min} and {params.max}")
+            self._sample(
+                rule,
+                expected=f"between {params.min} and {params.max}",
+                kind="between",
+                sql_params={"min": params.min, "max": params.max},
+            )
             if out_count
             else []
         )
@@ -176,7 +236,12 @@ class RuleEngine:
         non_matching = result.get("non_matching_count", 0)
         total = result.get("total_count", 0)
         violations = (
-            self._sample(rule, expected=f"matches pattern {params.pattern!r}")
+            self._sample(
+                rule,
+                expected=f"matches pattern {params.pattern!r}",
+                kind="regex",
+                sql_params={"pattern": params.pattern},
+            )
             if non_matching
             else []
         )
@@ -200,7 +265,12 @@ class RuleEngine:
         invalid = result.get("invalid_count", 0)
         total = result.get("total_count", 0)
         violations = (
-            self._sample(rule, expected=f"one of {params.values}")
+            self._sample(
+                rule,
+                expected=f"one of {params.values}",
+                kind="in_set",
+                sql_params={"values": params.values},
+            )
             if invalid
             else []
         )
@@ -246,7 +316,9 @@ class RuleEngine:
         negative = result.get("negative_count", 0)
         total = result.get("total_count", 0)
         violations = (
-            self._sample(rule, expected="non-negative value") if negative else []
+            self._sample(rule, expected="non-negative value", kind="not_negative")
+            if negative
+            else []
         )
         return CheckResult(
             rule=rule,
@@ -293,7 +365,16 @@ class RuleEngine:
         expected = (
             f"value present in {rule.params.reference}.{rule.params.key_column}"
         )
-        violations = self._sample(rule, expected=expected) if invalid else []
+        violations = (
+            self._sample(
+                rule,
+                expected=expected,
+                kind="reference_lookup",
+                sql_params={"valid_values": valid_values},
+            )
+            if invalid
+            else []
+        )
         return CheckResult(
             rule=rule, passed=invalid == 0,
             violation_count=invalid, violations=violations,

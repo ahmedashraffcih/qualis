@@ -69,6 +69,7 @@ class PostgresAdapter:
         connection_url: str,
         min_size: int = 1,
         max_size: int = 5,
+        statement_timeout_ms: int | None = None,
     ) -> None:
         if not _PSYCOPG_AVAILABLE:
             raise ImportError(
@@ -81,6 +82,22 @@ class PostgresAdapter:
             max_size=max_size,
             open=True,
         )
+        # Per-statement server-side timeout applied to every check query via
+        # SET LOCAL (scoped to the transaction, so pooled connections are not
+        # permanently altered). None = no timeout (server default).
+        self._statement_timeout_ms = statement_timeout_ms
+
+    def _begin_read_only(self, conn: Any) -> None:
+        """Mark the transaction READ ONLY and apply the statement timeout.
+
+        ``SET LOCAL`` scopes the timeout to the current transaction — the
+        pooled connection comes back clean for the next borrower.
+        """
+        conn.execute("SET TRANSACTION READ ONLY")
+        if self._statement_timeout_ms is not None:
+            conn.execute(
+                f"SET LOCAL statement_timeout = '{int(self._statement_timeout_ms)}ms'"
+            )
 
     # ------------------------------------------------------------------
     # DatabasePort implementation
@@ -134,7 +151,7 @@ class PostgresAdapter:
         table_ref = _qualified(schema, table)
         sql = NOT_NULL_SQL.format(column=column, table=table_ref)
         with self._pool.connection() as conn:
-            conn.execute("SET TRANSACTION READ ONLY")
+            self._begin_read_only(conn)
             with conn.cursor() as cur:
                 cur.execute(sql)
                 row = cur.fetchone()
@@ -145,7 +162,7 @@ class PostgresAdapter:
         table_ref = _qualified(schema, table)
         sql = UNIQUE_SQL.format(column=column, table=table_ref)
         with self._pool.connection() as conn:
-            conn.execute("SET TRANSACTION READ ONLY")
+            self._begin_read_only(conn)
             with conn.cursor() as cur:
                 cur.execute(sql)
                 row = cur.fetchone()
@@ -167,7 +184,7 @@ class PostgresAdapter:
         table_ref = _qualified(schema, table)
         sql = BETWEEN_SQL.format(column=column, table=table_ref)
         with self._pool.connection() as conn:
-            conn.execute("SET TRANSACTION READ ONLY")
+            self._begin_read_only(conn)
             with conn.cursor() as cur:
                 cur.execute(sql, {"min": min_val, "max": max_val})
                 row = cur.fetchone()
@@ -188,7 +205,7 @@ class PostgresAdapter:
         table_ref = _qualified(schema, table)
         sql = REGEX_SQL.format(column=column, table=table_ref)
         with self._pool.connection() as conn:
-            conn.execute("SET TRANSACTION READ ONLY")
+            self._begin_read_only(conn)
             with conn.cursor() as cur:
                 cur.execute(sql, {"pattern": pattern})
                 row = cur.fetchone()
@@ -205,7 +222,7 @@ class PostgresAdapter:
         table_ref = _qualified(schema, table)
         sql = IN_SET_SQL.format(column=column, table=table_ref)
         with self._pool.connection() as conn:
-            conn.execute("SET TRANSACTION READ ONLY")
+            self._begin_read_only(conn)
             with conn.cursor() as cur:
                 cur.execute(sql, {"values": values})
                 row = cur.fetchone()
@@ -216,7 +233,7 @@ class PostgresAdapter:
         table_ref = _qualified(schema, table)
         sql = ROW_COUNT_SQL.format(table=table_ref)
         with self._pool.connection() as conn:
-            conn.execute("SET TRANSACTION READ ONLY")
+            self._begin_read_only(conn)
             with conn.cursor() as cur:
                 cur.execute(sql)
                 row = cur.fetchone()
@@ -227,12 +244,76 @@ class PostgresAdapter:
         table_ref = _qualified(schema, table)
         sql = NOT_NEGATIVE_SQL.format(column=column, table=table_ref)
         with self._pool.connection() as conn:
-            conn.execute("SET TRANSACTION READ ONLY")
+            self._begin_read_only(conn)
             with conn.cursor() as cur:
                 cur.execute(sql)
                 row = cur.fetchone()
         negative, total = (row[0], row[1]) if row else (0, 0)
         return {"negative_count": int(negative), "total_count": int(total)}
+
+    def fetch_violation_samples(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        kind: str,
+        params: dict[str, Any],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Optional capability: return up to *limit* failing rows as evidence.
+
+        Predicates mirror the count templates in ``sql_templates`` so sampled
+        rows are members of the counted set. ``record_id`` is the row's
+        ``ctid`` (physical locator — stable within the sampling query, not
+        across VACUUM; good enough for evidence display).
+        """
+        bind: dict[str, Any] = {"limit": limit}
+        if kind == "not_null":
+            predicate = '"{column}" IS NULL'
+        elif kind == "unique":
+            predicate = (
+                '"{column}" IS NOT NULL AND "{column}" IN ('
+                'SELECT "{column}" FROM {table} WHERE "{column}" IS NOT NULL '
+                'GROUP BY "{column}" HAVING COUNT(*) > 1)'
+            )
+        elif kind == "between":
+            predicate = (
+                '"{column}" IS NOT NULL AND '
+                '("{column}"::text < %(min)s OR "{column}"::text > %(max)s)'
+            )
+            bind.update({"min": params["min"], "max": params["max"]})
+        elif kind == "regex":
+            predicate = (
+                '"{column}" IS NOT NULL AND NOT ("{column}"::text ~ %(pattern)s)'
+            )
+            bind["pattern"] = params["pattern"]
+        elif kind == "in_set":
+            predicate = (
+                '"{column}" IS NULL OR NOT ("{column}"::text = ANY(%(values)s))'
+            )
+            bind["values"] = list(params["values"])
+        elif kind == "not_negative":
+            predicate = '"{column}" IS NOT NULL AND "{column}" < 0'
+        elif kind == "reference_lookup":
+            predicate = (
+                '"{column}" IS NOT NULL AND '
+                'NOT ("{column}"::text = ANY(%(valid_values)s))'
+            )
+            bind["valid_values"] = list(params["valid_values"])
+        else:
+            raise ValueError(f"unsupported sample kind: {kind!r}")
+
+        table_ref = _qualified(schema, table)
+        sql = (
+            'SELECT "{column}" AS actual_value, ctid::text AS rid '
+            "FROM {table} WHERE " + predicate + " LIMIT %(limit)s"
+        ).format(column=column, table=table_ref)
+        with self._pool.connection() as conn:
+            self._begin_read_only(conn)
+            with conn.cursor() as cur:
+                cur.execute(sql, bind)
+                rows = cur.fetchall()
+        return [{"actual_value": r[0], "record_id": r[1]} for r in rows]
 
     def check_reference_lookup(
         self,
@@ -244,7 +325,7 @@ class PostgresAdapter:
         table_ref = _qualified(schema, table)
         sql = REFERENCE_LOOKUP_SQL.format(column=column, table=table_ref)
         with self._pool.connection() as conn:
-            conn.execute("SET TRANSACTION READ ONLY")
+            self._begin_read_only(conn)
             with conn.cursor() as cur:
                 cur.execute(sql, {"valid_values": valid_values})
                 row = cur.fetchone()

@@ -14,7 +14,11 @@ if TYPE_CHECKING:
     from qualis.config.settings import QualisSettings
 
 
-def create_checker(settings: QualisSettings, sample_path: Path | None = None) -> CheckRunner:
+def create_checker(
+    settings: QualisSettings,
+    sample_path: Path | None = None,
+    sample_rows: int | None = None,
+) -> CheckRunner:
     """Construct a :class:`CheckRunner` wired to the right adapter.
 
     When *sample_path* is provided the file is registered in a fresh
@@ -33,7 +37,10 @@ def create_checker(settings: QualisSettings, sample_path: Path | None = None) ->
     elif settings.adapter == "postgres":
         from qualis.adapters.postgres.adapter import PostgresAdapter
 
-        adapter = PostgresAdapter(settings.database_url.get_secret_value())
+        adapter = PostgresAdapter(
+            settings.database_url.get_secret_value(),
+            statement_timeout_ms=settings.statement_timeout_ms,
+        )
     else:
         adapter = DuckDBAdapter()
 
@@ -48,4 +55,5 @@ def create_checker(settings: QualisSettings, sample_path: Path | None = None) ->
         rules=rules,
         weights=weights,
         redact=settings.redact_actual_value,
+        sample_rows=sample_rows,
     )
