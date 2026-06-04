@@ -323,3 +323,51 @@ def test_reference_lookup_passes_when_all_keys_valid() -> None:
     engine = RuleEngine(db, schema="public", reference_data=ref)
     result = engine.evaluate_rule(rule)
     assert result.passed
+
+
+class _HugeCountAdapter:
+    """Stub adapter reporting massive failure counts without materialising rows.
+
+    Used to prove the bounded-violations invariant: building the result must
+    not allocate per-failing-row objects, so the stub returns counts only —
+    exactly the contract real adapters follow.
+    """
+
+    def check_not_null(self, schema: str, table: str, column: str) -> dict[str, int]:
+        return {"null_count": 1_000_000, "total_count": 1_000_000}
+
+
+class TestBoundedViolations:
+    def test_violations_list_is_bounded_under_massive_count(self) -> None:
+        from qualis.domain.models import MAX_SAMPLE_VIOLATIONS
+
+        engine = RuleEngine(_HugeCountAdapter(), schema=SCHEMA)
+        rule = _make_rule(check="not_null", column="value", params=NotNullParams())
+        result = engine.evaluate_rule(rule)
+        assert result.violation_count == 1_000_000  # authoritative count
+        assert 1 <= len(result.violations) <= MAX_SAMPLE_VIOLATIONS
+        assert not result.passed
+
+    def test_passing_check_has_empty_violations(self, engine: RuleEngine) -> None:
+        rule = _make_rule(check="not_null", column="id", params=NotNullParams())
+        result = engine.evaluate_rule(rule)
+        assert result.violation_count == 0
+        assert result.violations == []
+
+    def test_failing_check_sample_carries_expected(self, engine: RuleEngine) -> None:
+        rule = _make_rule(check="not_null", column="value", params=NotNullParams())
+        result = engine.evaluate_rule(rule)
+        assert result.violation_count == 1
+        assert len(result.violations) == 1
+        assert result.violations[0].expected == "non-null value"
+
+    def test_row_count_sample_carries_actual_count(self, engine: RuleEngine) -> None:
+        rule = _make_rule(
+            check="row_count",
+            column=None,
+            params=RowCountParams(min=10, max=100),
+        )
+        result = engine.evaluate_rule(rule)
+        assert not result.passed
+        assert result.violations[0].actual_value == 4
+        assert "row count between 10 and 100" in result.violations[0].expected

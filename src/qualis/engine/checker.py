@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from qualis.domain.enums import DQDimension, Severity
@@ -60,9 +61,7 @@ class CheckRunner:
         results = self._engine.evaluate_all(self._rules)
 
         if self._redact:
-            for r in results:
-                for v in r.violations:
-                    object.__setattr__(v, "actual_value", "[REDACTED]")
+            results = [self._redact_result(r) for r in results]
 
         datasets = {r.rule.dataset for r in results}
         dataset = next(iter(datasets)) if datasets else "unknown"
@@ -83,3 +82,19 @@ class CheckRunner:
             critical_violations=critical_violations,
         )
         return score, results
+
+    @staticmethod
+    def _redact_result(result: CheckResult) -> CheckResult:
+        """Return *result* with every sampled violation's actual_value redacted.
+
+        Rebuilds the frozen ``Violation`` / ``CheckResult`` instances via
+        ``dataclasses.replace`` — cheap now that ``violations`` is a bounded
+        sample (see ``MAX_SAMPLE_VIOLATIONS``). Results without sampled
+        violations are returned unchanged.
+        """
+        if not result.violations:
+            return result
+        redacted = [
+            replace(v, actual_value="[REDACTED]") for v in result.violations
+        ]
+        return replace(result, violations=redacted)

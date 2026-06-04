@@ -37,8 +37,5 @@ jobs:
       - name: Typecheck with mypy
         run: uv run mypy src/
 
-      - name: Run tests
+      - name: Run tests (coverage gate from pyproject fail_under)
         run: uv run pytest --cov=qualis --cov-report=term-missing
-
-      - name: Enforce coverage threshold
-        run: uv run pytest --cov=qualis --cov-fail-under=80

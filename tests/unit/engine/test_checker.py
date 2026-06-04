@@ -55,21 +55,48 @@ def test_critical_violations_does_not_exceed_total_violations() -> None:
 
 
 def test_redact_flag_replaces_actual_value() -> None:
-    """When redact=True every violation actual_value becomes [REDACTED]."""
+    """When redact=True every sampled violation's actual_value is [REDACTED]."""
+    _, results = _make_runner(redact=True).run_detailed()
+    sampled = [v for r in results for v in r.violations]
+    assert sampled, "expected at least one sampled violation from the fixture"
+    for v in sampled:
+        assert v.actual_value == "[REDACTED]"
+
+
+def test_redaction_is_immutable_and_bounded() -> None:
+    """Redaction rebuilds frozen instances; originals are never mutated."""
+    from qualis.domain.models import MAX_SAMPLE_VIOLATIONS, CheckResult, Violation
+    from qualis.domain.rule_engine import RuleEngine
+
     adapter = InMemoryAdapter()
     adapter.add_table("", "accidents", _SAMPLE_ROWS)
     rules = load_rules_from_file(COMPLETENESS_YAML)
-    runner = CheckRunner(adapter, rules, _WEIGHTS, schema="", redact=True)
-    score = runner.run()
-    # The completeness rule finds 1 null → 1 violation; redacted value expected
-    for ds in score.dimension_scores:
-        _ = ds  # ensure iteration works
-    # Verify via internal engine path — re-run without runner to get violations
+    engine = RuleEngine(adapter, "")
+    original = next(r for r in engine.evaluate_all(rules) if r.violations)
+    pre_redaction_value = original.violations[0].actual_value
+
+    redacted = CheckRunner._redact_result(original)
+
+    # New frozen instances — the originals are untouched.
+    assert redacted is not original
+    assert redacted.violations[0] is not original.violations[0]
+    assert isinstance(redacted, CheckResult)
+    assert isinstance(redacted.violations[0], Violation)
+    assert original.violations[0].actual_value == pre_redaction_value
+    assert redacted.violations[0].actual_value == "[REDACTED]"
+    # Counts and bound preserved.
+    assert redacted.violation_count == original.violation_count
+    assert len(redacted.violations) <= MAX_SAMPLE_VIOLATIONS
+
+
+def test_redact_result_passthrough_when_no_violations() -> None:
+    """Results with no sampled violations are returned unchanged."""
     from qualis.domain.rule_engine import RuleEngine
 
+    adapter = InMemoryAdapter()
+    adapter.add_table("", "accidents", _SAMPLE_ROWS)
+    rules = load_rules_from_file(COMPLETENESS_YAML)
     engine = RuleEngine(adapter, "")
-    results = engine.evaluate_all(rules)
-    for r in results:
-        for v in r.violations:
-            object.__setattr__(v, "actual_value", "[REDACTED]")
-            assert v.actual_value == "[REDACTED]"
+    clean = next(r for r in engine.evaluate_all(rules) if not r.violations)
+
+    assert CheckRunner._redact_result(clean) is clean
