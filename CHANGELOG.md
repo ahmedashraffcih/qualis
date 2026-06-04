@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.5.0 (unreleased) — Production hardening
+
+### Fixed
+- **`CheckResult.violations` is now a bounded sample, not one placeholder
+  per failing row.** Previously each count-only check built
+  `[Violation(...)] * n`, so a column with 10M nulls produced a 10M-slot
+  list — O(n) memory and O(n) downstream iteration (notably the redaction
+  pass). `violation_count` remains the authoritative failure count;
+  `violations` now holds at most `MAX_SAMPLE_VIOLATIONS` (100)
+  representative entries. At this stage the sample is a single placeholder
+  per failing check; row-level samples with populated
+  `record_id`/`actual_value` arrive with the upcoming `--sample-rows`
+  flag. Use `violation_count > len(violations)` to detect a truncated
+  sample. (#2)
+
+### Changed
+- **Redaction (`CheckRunner(redact=True)`) rebuilds `Violation` /
+  `CheckResult` immutably** via `dataclasses.replace` instead of mutating
+  frozen instances through `object.__setattr__`. Cheap now that the
+  violations list is bounded. (#2)
+
 ## v0.4.1 (2026-06-04) — Correctness sweep
 
 Hotfix release driven by an internal team dogfood review (Anwar / Nadia /
