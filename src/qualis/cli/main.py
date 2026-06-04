@@ -617,3 +617,10 @@ def discover(
 from qualis.cli.review_cmd import review as _review_cmd  # noqa: E402
 
 app.command(name="review")(_review_cmd)
+
+# Drift detection — capture baselines and compare against current data.
+from qualis.cli.drift_cmd import drift as _drift_cmd  # noqa: E402
+from qualis.cli.drift_cmd import snapshot as _snapshot_cmd  # noqa: E402
+
+app.command(name="snapshot")(_snapshot_cmd)
+app.command(name="drift")(_drift_cmd)

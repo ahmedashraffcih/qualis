@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.4.0 (2026-06-04) — Reach
+
+The "reach" release widens Qualis along three independent axes: more
+adapters, easier publishing, and a feedback loop for ageing rules.
+
+- **`qualis snapshot` + `qualis drift`.** Capture an immutable
+  `ProfileSnapshot` per rule at acceptance time; later, compare the
+  current profile against the baseline and emit findings classified
+  as `notice` / `warning` / `critical`. Addresses the practitioner
+  concern that one-shot rule generation ages badly when the
+  underlying data shifts (new categories, distribution widening,
+  null fraction creep). Findings use a 4-level severity ladder so
+  CI can fail on `--fail-on critical` without alerting on noise.
+- **`qualis-snowflake` adapter.** Sibling PyPI package implementing
+  `DatabasePort` against Snowflake. Read-only by contract: every
+  check wraps `BEGIN READ ONLY` / `ROLLBACK`. Snowflake-dialect
+  templates: `RLIKE` for regex, `%(name)s` parameter style.
+- **`qualis-bigquery` adapter.** Sibling PyPI package implementing
+  `DatabasePort` against BigQuery. Read-only by contract — DML
+  (`INSERT`/`UPDATE`/`DELETE`/`MERGE`/`DROP`/`CREATE`/`ALTER`) is
+  refused at the adapter boundary. BigQuery-dialect templates:
+  `COUNTIF` for filtered counts, `REGEXP_CONTAINS` for regex,
+  `IN UNNEST(@param)` for IN lists.
+- Entry-point plugin discovery via the `qualis.adapters` group so
+  sibling adapters install transparently and the core stays slim.
+
 ## v0.3.1 (2026-06-03)
 
 First PyPI release — no behaviour changes from v0.3.0. Adds PyPI metadata
