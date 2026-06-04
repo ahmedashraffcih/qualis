@@ -3,7 +3,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 try:
-    import psycopg_pool  # type: ignore[import-not-found]
+    # ``psycopg_pool`` ships type stubs in some versions but not others,
+    # and is only installed when the [postgres] extra is selected. Suppress
+    # both "can't find stubs" (env without extra) and "unused ignore"
+    # (env with extra and stubs available) to keep mypy happy in both.
+    import psycopg_pool  # type: ignore[import-not-found, unused-ignore]
 
     _PSYCOPG_AVAILABLE = True
 except ImportError:  # pragma: no cover
