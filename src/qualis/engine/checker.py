@@ -37,8 +37,9 @@ class CheckRunner:
         weights: dict[DQDimension, float],
         schema: str = "",
         redact: bool = False,
+        sample_rows: int | None = None,
     ) -> None:
-        self._engine = RuleEngine(adapter, schema)
+        self._engine = RuleEngine(adapter, schema, sample_rows=sample_rows)
         self._rules = rules
         self._weights = weights
         self._redact = redact

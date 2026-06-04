@@ -236,6 +236,16 @@ def check(
         "--allow-custom/--no-allow-custom",
         help="Allow rules that use the 'custom' check type.",
     ),
+    sample_rows: int = typer.Option(
+        0,
+        "--sample-rows",
+        help=(
+            "Attach up to N real failing rows per violated rule as evidence "
+            "(0 = placeholder sample only). Capped at 100."
+        ),
+        min=0,
+        max=100,
+    ),
     output_format: OutputFormat = typer.Option(  # noqa: B008
         OutputFormat.table,
         "--output-format",
@@ -275,7 +285,9 @@ def check(
             raise typer.Exit(1)
 
     settings = QualisSettings(rules_dir=rules, allow_custom=allow_custom)
-    runner = create_checker(settings, sample_path=sample)
+    runner = create_checker(
+        settings, sample_path=sample, sample_rows=sample_rows or None
+    )
 
     try:
         score = runner.run()
@@ -354,6 +366,16 @@ def report(
             "Auto-disabled when stdout is not a TTY (CI / pipes / test runners)."
         ),
     ),
+    sample_rows: int = typer.Option(
+        0,
+        "--sample-rows",
+        help=(
+            "Attach up to N real failing rows per violated rule as evidence "
+            "(0 = placeholder sample only). Capped at 100."
+        ),
+        min=0,
+        max=100,
+    ),
 ) -> None:
     """Generate a quality report (HTML scorecard or JSON).
 
@@ -387,7 +409,9 @@ def report(
             raise typer.Exit(1)
 
     settings = QualisSettings(rules_dir=rules, allow_custom=allow_custom)
-    runner = create_checker(settings, sample_path=sample)
+    runner = create_checker(
+        settings, sample_path=sample, sample_rows=sample_rows or None
+    )
 
     try:
         score, check_results = runner.run_detailed()

@@ -141,6 +141,54 @@ class InMemoryAdapter:
         )
         return {"invalid_count": invalid_count, "total_count": len(rows)}
 
+    def fetch_violation_samples(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        kind: str,
+        params: dict[str, Any],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Optional capability: return up to *limit* failing rows as evidence.
+
+        Each predicate mirrors the corresponding ``check_*`` count semantics
+        exactly, so sampled rows are always members of the counted set.
+        ``record_id`` is the zero-based row index in the table.
+        """
+        rows = self._get_rows(schema, table)
+
+        def fails(value: Any) -> bool:
+            if kind == "not_null":
+                return value is None
+            if kind == "unique":
+                if value is None:
+                    return False
+                non_null = [r.get(column) for r in rows if r.get(column) is not None]
+                return non_null.count(value) > 1
+            if kind == "between":
+                return value is not None and (
+                    str(value) < params["min"] or str(value) > params["max"]
+                )
+            if kind == "regex":
+                return value is None or not re.match(params["pattern"], str(value))
+            if kind == "in_set":
+                return value is None or str(value) not in set(params["values"])
+            if kind == "not_negative":
+                return value is not None and value < 0
+            if kind == "reference_lookup":
+                return value is not None and value not in set(params["valid_values"])
+            raise ValueError(f"unsupported sample kind: {kind!r}")
+
+        samples: list[dict[str, Any]] = []
+        for index, row in enumerate(rows):
+            value = row.get(column)
+            if fails(value):
+                samples.append({"record_id": index, "actual_value": value})
+                if len(samples) >= limit:
+                    break
+        return samples
+
     def _extract_table_from_sql(self, sql: str) -> str | None:
         match = re.search(r"FROM\s+(\S+)", sql, re.IGNORECASE)
         return match.group(1) if match else None
