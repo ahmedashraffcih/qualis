@@ -8,10 +8,18 @@ Thanks for considering a contribution! A few notes that will save us both time.
 git clone https://github.com/ahmedashraffcih/qualis
 cd qualis
 uv sync --all-extras --dev
+uv run pre-commit install   # one-time: wires the commit-time checks below
 uv run pytest -q
 ```
 
-Expected: 439+ tests pass.
+Expected: 471+ tests pass.
+
+Pre-commit runs `ruff check`, `mypy src/` (via `uv run`, so versions match
+CI exactly), plus YAML / whitespace sanity on every commit — the same gates
+CI enforces, with a seconds-long feedback loop instead of a CI round-trip.
+Run on demand with `uv run pre-commit run --all-files`. Tests are
+deliberately not in pre-commit (too slow per-commit); run them before
+pushing.
 
 ## Quality bar
 
