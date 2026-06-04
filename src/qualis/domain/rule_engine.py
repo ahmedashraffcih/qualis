@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from qualis.domain.enums import CheckType
-from qualis.domain.models import CheckResult, Rule, Violation
+from qualis.domain.models import (
+    MAX_SAMPLE_VIOLATIONS,
+    CheckResult,
+    Rule,
+    Violation,
+)
 from qualis.domain.params import (
     BetweenParams,
     InSetParams,
@@ -77,20 +82,39 @@ class RuleEngine:
             return parts[0], parts[1]
         return self._schema, rule.dataset
 
+    def _sample(
+        self,
+        rule: Rule,
+        *,
+        expected: str,
+        actual_value: Any = None,
+    ) -> list[Violation]:
+        """Build the bounded violations sample for a failing check.
+
+        Count-only stage: adapters report counts, not rows, so the sample is
+        a single representative placeholder. ``CheckResult.violation_count``
+        remains authoritative. The slice keeps the sample within
+        ``MAX_SAMPLE_VIOLATIONS`` once richer producers (``--sample-rows``)
+        fill this list with real rows.
+        """
+        return [
+            Violation(
+                rule=rule,
+                record_id=None,
+                actual_value=actual_value,
+                expected=expected,
+            )
+        ][:MAX_SAMPLE_VIOLATIONS]
+
     def _check_not_null(self, rule: Rule) -> CheckResult:
         schema, table = self._dataset_parts(rule)
         column = rule.column or ""
         result: dict[str, int] = self._adapter.check_not_null(schema, table, column)
         null_count = result.get("null_count", 0)
         total = result.get("total_count", 0)
-        violations = [
-            Violation(
-                rule=rule,
-                record_id=None,
-                actual_value=None,
-                expected="non-null value",
-            )
-        ] * null_count
+        violations = (
+            self._sample(rule, expected="non-null value") if null_count else []
+        )
         return CheckResult(
             rule=rule,
             passed=null_count == 0,
@@ -105,14 +129,9 @@ class RuleEngine:
         result: dict[str, int] = self._adapter.check_unique(schema, table, column)
         dup_count = result.get("duplicate_count", 0)
         total = result.get("total_count", 0)
-        violations = [
-            Violation(
-                rule=rule,
-                record_id=None,
-                actual_value=None,
-                expected="unique value",
-            )
-        ] * dup_count
+        violations = (
+            self._sample(rule, expected="unique value") if dup_count else []
+        )
         return CheckResult(
             rule=rule,
             passed=dup_count == 0,
@@ -132,14 +151,11 @@ class RuleEngine:
         )
         out_count = result.get("out_of_range_count", 0)
         total = result.get("total_count", 0)
-        violations = [
-            Violation(
-                rule=rule,
-                record_id=None,
-                actual_value=None,
-                expected=f"between {params.min} and {params.max}",
-            )
-        ] * out_count
+        violations = (
+            self._sample(rule, expected=f"between {params.min} and {params.max}")
+            if out_count
+            else []
+        )
         return CheckResult(
             rule=rule,
             passed=out_count == 0,
@@ -159,14 +175,11 @@ class RuleEngine:
         )
         non_matching = result.get("non_matching_count", 0)
         total = result.get("total_count", 0)
-        violations = [
-            Violation(
-                rule=rule,
-                record_id=None,
-                actual_value=None,
-                expected=f"matches pattern {params.pattern!r}",
-            )
-        ] * non_matching
+        violations = (
+            self._sample(rule, expected=f"matches pattern {params.pattern!r}")
+            if non_matching
+            else []
+        )
         return CheckResult(
             rule=rule,
             passed=non_matching == 0,
@@ -186,14 +199,11 @@ class RuleEngine:
         )
         invalid = result.get("invalid_count", 0)
         total = result.get("total_count", 0)
-        violations = [
-            Violation(
-                rule=rule,
-                record_id=None,
-                actual_value=None,
-                expected=f"one of {params.values}",
-            )
-        ] * invalid
+        violations = (
+            self._sample(rule, expected=f"one of {params.values}")
+            if invalid
+            else []
+        )
         return CheckResult(
             rule=rule,
             passed=invalid == 0,
@@ -213,14 +223,11 @@ class RuleEngine:
         above_max = params.max is not None and count > params.max
         failed = below_min or above_max
         violations = (
-            [
-                Violation(
-                    rule=rule,
-                    record_id=None,
-                    actual_value=count,
-                    expected=f"row count between {params.min} and {params.max}",
-                )
-            ]
+            self._sample(
+                rule,
+                expected=f"row count between {params.min} and {params.max}",
+                actual_value=count,
+            )
             if failed
             else []
         )
@@ -238,14 +245,9 @@ class RuleEngine:
         result: dict[str, int] = self._adapter.check_not_negative(schema, table, column)
         negative = result.get("negative_count", 0)
         total = result.get("total_count", 0)
-        violations = [
-            Violation(
-                rule=rule,
-                record_id=None,
-                actual_value=None,
-                expected="non-negative value",
-            )
-        ] * negative
+        violations = (
+            self._sample(rule, expected="non-negative value") if negative else []
+        )
         return CheckResult(
             rule=rule,
             passed=negative == 0,
@@ -262,10 +264,9 @@ class RuleEngine:
             # the rule isn't silently skipped.
             return CheckResult(
                 rule=rule, passed=False, violation_count=1,
-                violations=[Violation(
-                    rule=rule, record_id=None, actual_value=None,
-                    expected="reference data adapter not configured",
-                )],
+                violations=self._sample(
+                    rule, expected="reference data adapter not configured"
+                ),
                 rows_checked=0,
             )
         schema, table = self._dataset_parts(rule)
@@ -289,12 +290,10 @@ class RuleEngine:
                 if r.get(column) is not None and r.get(column) not in valid_set
             )
             total = len(rows)
-        violations = [
-            Violation(
-                rule=rule, record_id=None, actual_value=None,
-                expected=f"value present in {rule.params.reference}.{rule.params.key_column}",
-            )
-        ] * invalid
+        expected = (
+            f"value present in {rule.params.reference}.{rule.params.key_column}"
+        )
+        violations = self._sample(rule, expected=expected) if invalid else []
         return CheckResult(
             rule=rule, passed=invalid == 0,
             violation_count=invalid, violations=violations,

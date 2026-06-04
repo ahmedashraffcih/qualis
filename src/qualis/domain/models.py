@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from qualis.domain.enums import RuleStatus
 
@@ -43,12 +43,30 @@ class Violation:
     context: dict[str, Any] = field(default_factory=dict)
 
 
+# Upper bound on the number of representative Violation objects retained in
+# CheckResult.violations. The full failure count lives in
+# CheckResult.violation_count. Prevents O(rows) memory at production scale.
+MAX_SAMPLE_VIOLATIONS: Final[int] = 100
+
+
 @dataclass(frozen=True)
 class CheckResult:
+    """Result of evaluating one Rule.
+
+    ``violation_count`` is AUTHORITATIVE — the true number of failing rows.
+
+    ``violations`` is a BOUNDED SAMPLE, not the full set: it holds at most
+    ``MAX_SAMPLE_VIOLATIONS`` representative ``Violation`` objects so a
+    failing check with millions of rows does not materialise millions of
+    placeholder instances. ``violation_count > len(violations)`` means the
+    sample is truncated. Never derive a failure count from
+    ``len(violations)`` — always use ``violation_count``.
+    """
+
     rule: Rule
     passed: bool
     violation_count: int
-    violations: list[Violation]
+    violations: list[Violation]  # bounded sample; see class docstring
     rows_checked: int
     # Skipped checks did NOT execute (e.g. stubbed `sql` / `custom` types
     # that require an out-of-band implementation). They are excluded from
