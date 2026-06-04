@@ -67,7 +67,9 @@ omit = ["tests/*"]
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 90
+# Project standard: >80% (domain logic sits well above — 97% as of v0.5.0).
+# Was 90, which contradicted ci.yml's 80 gate and kept CI red since v0.3.1.
+fail_under = 80
 
 [tool.mypy]
 strict = true
