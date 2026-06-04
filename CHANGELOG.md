@@ -2,6 +2,21 @@
 
 ## v0.5.0 (unreleased) — Production hardening
 
+### Added
+- **`--sample-rows N` on `check` and `report`** — failing rules can now
+  attach up to N real failing rows (`record_id` + `actual_value`) as
+  evidence, fetched via an optional adapter capability
+  (`fetch_violation_samples`, implemented for in-memory, DuckDB, and
+  Postgres). Adapters without the capability keep the placeholder
+  sample; sampling errors degrade to the placeholder with a logged
+  warning, never failing the check. Capped at `MAX_SAMPLE_VIOLATIONS`
+  (100). See AgDR-0003. (#8)
+- **`QUALIS_STATEMENT_TIMEOUT_MS`** (`QualisSettings.statement_timeout_ms`)
+  — server-side per-statement timeout for check queries. Postgres applies
+  it via `SET LOCAL statement_timeout` inside each check's READ ONLY
+  transaction, so one slow table can no longer hang a whole run. DuckDB
+  has no per-statement timeout and documents that limitation. (#8)
+
 ### Fixed
 - **`CheckResult.violations` is now a bounded sample, not one placeholder
   per failing row.** Previously each count-only check built
