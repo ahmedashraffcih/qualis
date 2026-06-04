@@ -1,0 +1,32 @@
+# Pre-commit hooks mirroring the CI gates (.github/workflows/ci.yml).
+# One-time setup:  uv run pre-commit install
+# Run manually:    uv run pre-commit run --all-files
+#
+# ruff/mypy run through `uv run` (language: system) so the versions are the
+# project's locked ones — no drift between local hooks and CI.
+# Deliberately NOT included: pytest (too slow per-commit; pre-push/CI concern)
+# and ruff format (the codebase is not format-clean and CI does not gate on it).
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        # Workflow files included — a YAML syntax error in ci.yml shipped to a
+        # PR once (qualis#3 history); this catches that class at commit time.
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (mirrors CI)
+        entry: uv run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: mypy
+        name: mypy src/ strict (mirrors CI)
+        entry: uv run mypy src/
+        language: system
+        pass_filenames: false
+        files: ^(src/|pyproject\.toml)
