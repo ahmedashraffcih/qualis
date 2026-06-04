@@ -302,11 +302,26 @@ class RuleEngine:
         )
 
     def _check_stub(self, rule: Rule) -> CheckResult:
-        """Return a passing stub result for check types that require real SQL/custom execution."""
+        """Return a SKIPPED result for check types Qualis cannot execute itself.
+
+        ``sql`` and ``custom`` rules require an out-of-band implementation
+        (an analyst-supplied SQL fragment, or a user-supplied Python
+        handler). Until that wiring exists, Qualis must NOT report these
+        as passing — that would let unrun checks contribute 100% to the
+        aggregate score and mask real failures. They are marked SKIPPED
+        and excluded from the scoring denominator.
+        """
+        check_name = rule.check.value if hasattr(rule.check, "value") else str(rule.check)
+        reason = (
+            f"check type {check_name!r} is not executable in the engine yet "
+            f"(rule {rule.id})"
+        )
         return CheckResult(
             rule=rule,
-            passed=True,
+            passed=False,
             violation_count=0,
             violations=[],
             rows_checked=0,
+            skipped=True,
+            skip_reason=reason,
         )

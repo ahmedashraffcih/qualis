@@ -50,6 +50,11 @@ class CheckResult:
     violation_count: int
     violations: list[Violation]
     rows_checked: int
+    # Skipped checks did NOT execute (e.g. stubbed `sql` / `custom` types
+    # that require an out-of-band implementation). They are excluded from
+    # aggregate score so an unrun check cannot silently report 100/100.
+    skipped: bool = False
+    skip_reason: str = ""
 
 
 @dataclass(frozen=True)

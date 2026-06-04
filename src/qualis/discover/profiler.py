@@ -94,12 +94,16 @@ def _profile_column(
     quoted_table = f'"{table}"'
     quoted_col = f'"{column}"'
 
+    # MIN/MAX must use the column's native type so numeric columns sort
+    # numerically (otherwise '99' > '500' lexicographically and discovered
+    # `between` rules carry wrong bounds). Cast happens on the *result*
+    # when populating ColumnProfile.min_value / max_value below.
     sql = (
         f"SELECT "
         f"  COUNT(*) FILTER (WHERE {quoted_col} IS NULL) AS null_count, "
         f"  COUNT(DISTINCT {quoted_col}) AS distinct_count, "
-        f"  MIN(CAST({quoted_col} AS VARCHAR)) AS min_v, "
-        f"  MAX(CAST({quoted_col} AS VARCHAR)) AS max_v "
+        f"  MIN({quoted_col}) AS min_v, "
+        f"  MAX({quoted_col}) AS max_v "
         f"FROM {quoted_table}"
     )
     rows = adapter.query(sql)

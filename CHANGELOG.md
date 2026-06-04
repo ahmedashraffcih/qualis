@@ -1,5 +1,49 @@
 # Changelog
 
+## v0.4.1 (2026-06-04) — Correctness sweep
+
+Hotfix release driven by an internal team dogfood review (Anwar / Nadia /
+Khalil / Salim). Two ship-stopper bugs that let Qualis silently report
+100/100 on rules that hadn't actually run, plus a handful of input-
+validation and drift-noise fixes.
+
+### Fixed
+- **Profiler MIN/MAX no longer string-sorts numeric columns.** Discovered
+  `between` rules on int/float columns previously got lexicographic
+  bounds (e.g. `max='99'` on a column with values up to 500). MIN/MAX
+  now run on the native type; ColumnProfile keeps the string field for
+  stable serialisation.
+- **`sql` and `custom` check types are SKIPPED, not silent-passing.**
+  Previously they returned `passed=True` and counted toward the
+  aggregate score — a rule that never ran could report 100/100.
+  `CheckResult` gains `skipped: bool` and `skip_reason: str` fields;
+  scoring excludes skipped results from the denominator.
+- **`between` / `regex` / `sql` / `custom` / `in_set` / `reference_lookup`
+  reject rules with missing or empty required parameters at load time**
+  instead of crashing confusingly at runtime.
+- **Duplicate rule ids in YAML now fail loading** rather than silently
+  shadowing.
+- **Corrupted snapshot JSON raises a typed `CorruptSnapshotError`** with
+  a clear remediation hint instead of a raw `JSONDecodeError` stack
+  trace.
+
+### Changed
+- **Snapshots are now keyed by table, not rule.** Previously N rules on
+  one table produced N copies of the same snapshot and N× duplicate
+  drift findings. One snapshot per table; each drift finding carries an
+  `affected_rules` tuple naming the rules invalidated. **This is a
+  breaking change to the v0.4.0 snapshot file format** — re-run
+  `qualis snapshot` after upgrading.
+- **Drift no longer emits `new_categories` findings on continuous
+  numeric columns.** Sample-value churn between runs was producing
+  spurious CRITICAL findings on every float / integer column. Categorical
+  drift detection now requires `inferred_type not in {float, integer}`
+  and a small distinct-count.
+- **`qualis report --format json` now includes `aggregate_score_pct`**
+  (0–100 int) alongside the existing `aggregate_score` (0–1 float),
+  matching the HTML scorecard and terminal table. Dashboard ingestion
+  no longer misreads the fraction as near-zero.
+
 ## v0.4.0 (2026-06-04) — Reach
 
 The "reach" release widens Qualis along three independent axes: more

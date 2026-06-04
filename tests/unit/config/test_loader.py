@@ -221,3 +221,79 @@ def test_loader_parses_reference_lookup_rule(tmp_path: Path) -> None:
     assert isinstance(rules[0].params, ReferenceLookupParams)
     assert rules[0].params.reference == "country_codes"
     assert rules[0].params.key_column == "code"
+
+
+def test_between_without_min_max_raises(tmp_path: Path) -> None:
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: r1\n"
+        '    name: "amt range"\n'
+        "    dimension: validity\n"
+        "    severity: warning\n"
+        "    dataset: orders\n"
+        "    column: amount\n"
+        "    check: between\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"between.*requires.*min.*max"):
+        load_rules_from_file(rules_file)
+
+
+def test_regex_without_pattern_raises(tmp_path: Path) -> None:
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: r1\n"
+        '    name: "email format"\n'
+        "    dimension: validity\n"
+        "    severity: warning\n"
+        "    dataset: users\n"
+        "    column: email\n"
+        "    check: regex\n"
+        "    parameters: {}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"regex.*requires.*pattern"):
+        load_rules_from_file(rules_file)
+
+
+def test_in_set_without_values_raises(tmp_path: Path) -> None:
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: r1\n"
+        '    name: "status set"\n'
+        "    dimension: validity\n"
+        "    severity: warning\n"
+        "    dataset: orders\n"
+        "    column: status\n"
+        "    check: in_set\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"in_set.*requires.*values"):
+        load_rules_from_file(rules_file)
+
+
+def test_duplicate_rule_ids_raise(tmp_path: Path) -> None:
+    rules_file = tmp_path / "rules.yaml"
+    rules_file.write_text(
+        "rules:\n"
+        "  - id: DUP-1\n"
+        '    name: "first"\n'
+        "    dimension: completeness\n"
+        "    severity: critical\n"
+        "    dataset: t\n"
+        "    column: a\n"
+        "    check: not_null\n"
+        "  - id: DUP-1\n"
+        '    name: "second (shadow)"\n'
+        "    dimension: completeness\n"
+        "    severity: critical\n"
+        "    dataset: t\n"
+        "    column: b\n"
+        "    check: not_null\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Duplicate rule id"):
+        load_rules_from_file(rules_file)

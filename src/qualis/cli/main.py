@@ -192,6 +192,21 @@ def _asdict_safe(obj: Any) -> Any:
     return obj
 
 
+def _augment_score_json(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add ``aggregate_score_pct`` (0-100 int) alongside the 0-1 fraction.
+
+    The HTML scorecard, terminal table, and ``--fail-on-score`` flag all
+    work in 0-100. Without this, a dashboard ingesting the JSON would see
+    a fraction between 0 and 1 and read it as near-zero. Existing readers
+    of ``aggregate_score`` keep working — this is an additive field.
+    """
+    if isinstance(payload, dict) and "aggregate_score" in payload:
+        score = payload["aggregate_score"]
+        if isinstance(score, (int, float)):
+            payload["aggregate_score_pct"] = round(score * 100)
+    return payload
+
+
 @app.command()
 def check(
     rules: Path = typer.Option(  # noqa: B008
@@ -269,7 +284,7 @@ def check(
         raise typer.Exit(1) from exc
 
     if output_format == OutputFormat.json:
-        payload = _asdict_safe(score)
+        payload = _augment_score_json(_asdict_safe(score))
         sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
     else:
         print_score(score)
@@ -388,7 +403,7 @@ def report(
         if open_browser and sys.stdout.isatty():
             webbrowser.open(output.resolve().as_uri())
     else:
-        payload = _asdict_safe(score)
+        payload = _augment_score_json(_asdict_safe(score))
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
         console.print(

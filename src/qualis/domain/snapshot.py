@@ -1,8 +1,9 @@
-"""ProfileSnapshot — a frozen-in-time view of a column's statistics.
+"""ProfileSnapshot — a frozen-in-time view of a table's column statistics.
 
-Captured at rule-acceptance and stored as JSON; the drift engine compares
-the current profile against this baseline to detect data shifts that
-invalidate rule assumptions.
+Captured per-table (NOT per-rule — that caused N-times duplicate drift
+findings when N rules referenced the same table). The drift engine
+compares the current profile against this baseline and attributes
+findings to all rules that reference the affected column.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from datetime import UTC, datetime
 
 @dataclass(frozen=True)
 class ColumnSnapshot:
-    """Frozen statistics for one column at acceptance time."""
+    """Frozen statistics for one column at snapshot time."""
 
     column: str
     inferred_type: str
@@ -29,10 +30,8 @@ class ColumnSnapshot:
 
 @dataclass(frozen=True)
 class ProfileSnapshot:
-    """A snapshot of a table profile taken when a rule was accepted."""
+    """A snapshot of a table profile — one per table, not per rule."""
 
-    rule_id: str
-    dataset: str
     table: str
     captured_at: str  # ISO 8601 UTC
     row_count: int

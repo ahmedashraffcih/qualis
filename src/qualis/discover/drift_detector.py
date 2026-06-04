@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from qualis.discover.profiler import TableProfile, profile_table
@@ -13,8 +14,8 @@ if TYPE_CHECKING:
     from qualis.domain.models import Rule
 
 
-def snapshot_from_profile(rule_id: str, dataset: str, profile: TableProfile) -> ProfileSnapshot:
-    """Capture a TableProfile as an immutable ProfileSnapshot for a rule."""
+def snapshot_from_profile(profile: TableProfile) -> ProfileSnapshot:
+    """Capture a TableProfile as an immutable ProfileSnapshot for the table."""
     columns = tuple(
         ColumnSnapshot(
             column=col.name,
@@ -31,8 +32,6 @@ def snapshot_from_profile(rule_id: str, dataset: str, profile: TableProfile) -> 
         for col in profile.columns
     )
     return ProfileSnapshot(
-        rule_id=rule_id,
-        dataset=dataset,
         table=profile.table,
         captured_at=ProfileSnapshot.now_iso(),
         row_count=profile.row_count,
@@ -40,26 +39,37 @@ def snapshot_from_profile(rule_id: str, dataset: str, profile: TableProfile) -> 
     )
 
 
+def _rules_by_table_column(rules: list[Rule]) -> dict[str, dict[str, tuple[str, ...]]]:
+    """Group rules into ``{table: {column: (rule_id, ...)}}``."""
+    out: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    for rule in rules:
+        col = rule.column or "*"
+        out[rule.dataset][col].append(rule.id)
+    return {t: {c: tuple(ids) for c, ids in cols.items()} for t, cols in out.items()}
+
+
 def detect_drift(
     adapter: object,
     store: SnapshotStore,
     rules: list[Rule],
 ) -> dict[str, list[DriftFinding]]:
-    """Profile each rule's table in the live database, compare to its snapshot.
+    """Profile each referenced table once and compare against its snapshot.
 
-    Returns a mapping rule_id -> list of findings (empty when no drift).
-    Rules without a snapshot are skipped silently.
+    Returns a mapping ``table_name -> list of findings``. Tables without
+    a snapshot are skipped silently. Each finding includes the tuple of
+    affected rule ids drawn from ``rules``.
     """
-    findings_by_rule: dict[str, list[DriftFinding]] = {}
-    for rule in rules:
-        if not store.exists(rule.id):
+    table_rules = _rules_by_table_column(rules)
+    findings_by_table: dict[str, list[DriftFinding]] = {}
+    for table, rules_by_column in table_rules.items():
+        if not store.exists(table):
             continue
-        baseline = store.load(rule.id)
-        current_profile = profile_table(adapter, baseline.table)
-        current_snapshot = snapshot_from_profile(
-            rule_id=rule.id,
-            dataset=baseline.dataset,
-            profile=current_profile,
+        baseline = store.load(table)
+        current_profile = profile_table(adapter, table)
+        current_snapshot = snapshot_from_profile(current_profile)
+        findings_by_table[table] = compare_snapshots(
+            baseline=baseline,
+            current=current_snapshot,
+            rules_by_column=rules_by_column,
         )
-        findings_by_rule[rule.id] = compare_snapshots(baseline, current_snapshot)
-    return findings_by_rule
+    return findings_by_table

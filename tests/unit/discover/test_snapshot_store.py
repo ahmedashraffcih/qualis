@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003
 
-from qualis.discover.snapshot_store import SnapshotStore
+import pytest
+
+from qualis.discover.snapshot_store import CorruptSnapshotError, SnapshotStore
 from qualis.domain.snapshot import ColumnSnapshot, ProfileSnapshot
 
 
-def _sample_snapshot(rule_id: str = "R1") -> ProfileSnapshot:
+def _sample_snapshot(table: str = "users") -> ProfileSnapshot:
     return ProfileSnapshot(
-        rule_id=rule_id,
-        dataset="public",
-        table="users",
+        table=table,
         captured_at="2026-06-01T12:00:00+00:00",
         row_count=1000,
         columns=(
@@ -34,32 +34,61 @@ def test_save_and_load_roundtrip(tmp_path: Path) -> None:
     store = SnapshotStore(tmp_path)
     snap = _sample_snapshot()
     store.save(snap)
-    loaded = store.load("R1")
+    loaded = store.load("users")
     assert loaded == snap
 
 
 def test_save_writes_human_readable_json(tmp_path: Path) -> None:
     store = SnapshotStore(tmp_path)
-    snap = _sample_snapshot()
-    written = store.save(snap)
+    written = store.save(_sample_snapshot())
     text = written.read_text()
-    assert "rule_id" in text
+    assert "captured_at" in text
     assert "a@x.com" in text
-    # sorted keys → "captured_at" sorts before "rule_id"
-    assert text.index('"captured_at"') < text.index('"rule_id"')
 
 
 def test_exists_and_list(tmp_path: Path) -> None:
     store = SnapshotStore(tmp_path)
-    assert not store.exists("R1")
-    assert store.list_rule_ids() == []
-    store.save(_sample_snapshot("R1"))
-    store.save(_sample_snapshot("R2"))
-    assert store.exists("R1")
-    assert store.list_rule_ids() == ["R1", "R2"]
+    assert not store.exists("users")
+    assert store.list_tables() == []
+    store.save(_sample_snapshot("users"))
+    store.save(_sample_snapshot("orders"))
+    assert store.exists("users")
+    assert sorted(store.list_tables()) == ["orders", "users"]
 
 
 def test_store_creates_root_if_missing(tmp_path: Path) -> None:
     nested = tmp_path / "nested" / "deeper"
     SnapshotStore(nested)
     assert nested.is_dir()
+
+
+def test_qualified_table_name_is_filename_safe(tmp_path: Path) -> None:
+    """A dataset like ``schema.users`` becomes a flat filename."""
+    store = SnapshotStore(tmp_path)
+    snap = _sample_snapshot("public.users")
+    written = store.save(snap)
+    assert written.name == "public_users.json"
+    loaded = store.load("public.users")
+    assert loaded.table == "public.users"
+
+
+def test_corrupted_json_raises_clear_error(tmp_path: Path) -> None:
+    """Regression: malformed JSON used to raise json.JSONDecodeError stack trace."""
+    store = SnapshotStore(tmp_path)
+    bad = store.path_for("broken")
+    bad.write_text("{ this is not valid json")
+    with pytest.raises(CorruptSnapshotError, match="not valid JSON"):
+        store.load("broken")
+
+
+def test_shape_mismatch_raises_clear_error(tmp_path: Path) -> None:
+    """A JSON file with the wrong shape (e.g. v0.4.0 per-rule format) gives a clear error."""
+    store = SnapshotStore(tmp_path)
+    legacy = store.path_for("legacy_table")
+    # Older shape used ``rule_id`` and ``dataset`` keys; missing ``table``.
+    legacy.write_text(
+        '{"rule_id": "R1", "dataset": "ds", "captured_at": "x", '
+        '"row_count": 10, "columns": []}'
+    )
+    with pytest.raises(CorruptSnapshotError, match="unexpected shape"):
+        store.load("legacy_table")

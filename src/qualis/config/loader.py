@@ -80,20 +80,44 @@ def _parse_params(check: str, parameters: dict[str, Any] | None) -> CheckParams:
     if check == CheckType.UNIQUE:
         return UniqueParams()
     if check == CheckType.BETWEEN:
-        min_raw = str(params.get("min", ""))
-        max_raw = str(params.get("max", ""))
+        if "min" not in params or "max" not in params:
+            raise ValueError(
+                "check 'between' requires both 'min' and 'max' under parameters: "
+                f"got {sorted(params.keys()) or 'no parameters'}"
+            )
         return BetweenParams(
-            min=_resolve_template_vars(min_raw),
-            max=_resolve_template_vars(max_raw),
+            min=_resolve_template_vars(str(params["min"])),
+            max=_resolve_template_vars(str(params["max"])),
         )
     if check == CheckType.REGEX:
-        return RegexParams(pattern=str(params.get("pattern", "")))
+        if "pattern" not in params or not str(params["pattern"]).strip():
+            raise ValueError(
+                "check 'regex' requires non-empty 'pattern' under parameters"
+            )
+        return RegexParams(pattern=str(params["pattern"]))
     if check == CheckType.SQL:
-        return SqlParams(expression=str(params.get("expression", "")))
+        if "expression" not in params or not str(params["expression"]).strip():
+            raise ValueError(
+                "check 'sql' requires non-empty 'expression' under parameters"
+            )
+        return SqlParams(expression=str(params["expression"]))
     if check == CheckType.CUSTOM:
-        return CustomParams(handler=str(params.get("handler", "")))
+        if "handler" not in params or not str(params["handler"]).strip():
+            raise ValueError(
+                "check 'custom' requires non-empty 'handler' under parameters "
+                "(module.path.callable)"
+            )
+        return CustomParams(handler=str(params["handler"]))
     if check == CheckType.IN_SET:
-        raw_values = params.get("values", [])
+        if "values" not in params:
+            raise ValueError(
+                "check 'in_set' requires 'values' (a non-empty list) under parameters"
+            )
+        raw_values = params["values"]
+        if not isinstance(raw_values, list) or not raw_values:
+            raise ValueError(
+                "check 'in_set' requires 'values' to be a non-empty list"
+            )
         return InSetParams(values=[str(v) for v in raw_values])
     if check == CheckType.ROW_COUNT:
         raw_min = params.get("min")
@@ -105,9 +129,14 @@ def _parse_params(check: str, parameters: dict[str, Any] | None) -> CheckParams:
     if check == CheckType.NOT_NEGATIVE:
         return NotNegativeParams()
     if check == CheckType.REFERENCE_LOOKUP:
+        if "reference" not in params or "key_column" not in params:
+            raise ValueError(
+                "check 'reference_lookup' requires both 'reference' and 'key_column' "
+                f"under parameters: got {sorted(params.keys()) or 'no parameters'}"
+            )
         return ReferenceLookupParams(
-            reference=str(params.get("reference", "")),
-            key_column=str(params.get("key_column", "")),
+            reference=str(params["reference"]),
+            key_column=str(params["key_column"]),
         )
     # Unreachable — check has already been validated against CheckType values
     raise ValueError(f"Unhandled check type: {check}")  # pragma: no cover
@@ -163,12 +192,32 @@ def _parse_rule(data: dict[str, Any]) -> Rule:
     )
 
 
+def _check_for_duplicate_ids(rules: list[Rule], source: str) -> None:
+    """Reject loads where two rules share an ``id``.
+
+    Silent shadowing was the original behaviour and produced hard-to-debug
+    rule loss (the second rule with the same id wins or the first wins
+    depending on dict-iteration order). Loud failure is the right shape.
+    """
+    seen: dict[str, int] = {}
+    for r in rules:
+        seen[r.id] = seen.get(r.id, 0) + 1
+    dups = sorted(rid for rid, n in seen.items() if n > 1)
+    if dups:
+        raise ValueError(
+            f"Duplicate rule id(s) in {source}: {dups}. "
+            "Every rule must have a unique id."
+        )
+
+
 def load_rules_from_file(path: Path) -> list[Rule]:
     """Load all rules defined in a single YAML file."""
     text = path.read_text(encoding="utf-8")
     doc: dict[str, Any] = yaml.safe_load(text) or {}
     raw_rules: list[dict[str, Any]] = doc.get("rules", [])
-    return [_parse_rule(r) for r in raw_rules]
+    rules = [_parse_rule(r) for r in raw_rules]
+    _check_for_duplicate_ids(rules, source=str(path))
+    return rules
 
 
 def load_rules_from_directory(directory: Path) -> list[Rule]:
@@ -177,6 +226,7 @@ def load_rules_from_directory(directory: Path) -> list[Rule]:
     for ext in ("*.yaml", "*.yml"):
         for path in sorted(directory.glob(ext)):
             rules.extend(load_rules_from_file(path))
+    _check_for_duplicate_ids(rules, source=str(directory))
     return rules
 
 

@@ -25,6 +25,11 @@ def compute_dimension_scores(
 
     buckets: dict[DQDimension, list[CheckResult]] = defaultdict(list)
     for result in results:
+        # Skipped checks (unexecuted stubs like `sql` / `custom`) must NOT
+        # contribute to the dimension score — otherwise an unrun check
+        # would silently boost or drag the aggregate.
+        if result.skipped:
+            continue
         buckets[result.rule.dimension].append(result)
 
     dimension_scores: list[DimensionScore] = []

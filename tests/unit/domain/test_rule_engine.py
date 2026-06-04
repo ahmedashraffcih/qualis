@@ -143,7 +143,13 @@ class TestRegex:
 
 
 class TestSqlStub:
-    def test_sql_check_returns_passing_stub(self, engine: RuleEngine) -> None:
+    def test_sql_check_is_marked_skipped_not_passing(self, engine: RuleEngine) -> None:
+        """Regression: stub checks must NOT report passed=True.
+
+        An unexecuted ``sql`` rule used to silently count as passing — a
+        rule that never ran would contribute 100% to the aggregate. The
+        engine now marks these SKIPPED so scoring excludes them.
+        """
         from qualis.domain.params import SqlParams
 
         rule = _make_rule(
@@ -152,8 +158,47 @@ class TestSqlStub:
             params=SqlParams(expression="SELECT COUNT(*) FROM records WHERE val IS NULL"),
         )
         result = engine.evaluate_rule(rule)
-        assert result.passed
+        assert result.skipped is True
+        assert result.passed is False
+        assert "not executable" in result.skip_reason
         assert result.violation_count == 0
+
+    def test_custom_check_is_marked_skipped(self, engine: RuleEngine) -> None:
+        from qualis.domain.params import CustomParams
+
+        rule = _make_rule(
+            check="custom",
+            column=None,
+            params=CustomParams(handler="my_module.my_handler"),
+        )
+        result = engine.evaluate_rule(rule)
+        assert result.skipped is True
+        assert result.passed is False
+
+    def test_skipped_checks_excluded_from_dimension_score(self) -> None:
+        """A skipped check must not boost or drag the dimension score."""
+        from qualis.domain.enums import DQDimension
+        from qualis.domain.models import CheckResult
+        from qualis.domain.params import NotNullParams, SqlParams
+        from qualis.domain.scoring import compute_dimension_scores
+
+        passed = CheckResult(
+            rule=_make_rule(rule_id="r1", check="not_null", column="x", params=NotNullParams()),
+            passed=True, violation_count=0, violations=[], rows_checked=10,
+        )
+        sql_rule = _make_rule(
+            rule_id="r2", check="sql", column=None, params=SqlParams(expression="x"),
+        )
+        skipped = CheckResult(
+            rule=sql_rule,
+            passed=False, violation_count=0, violations=[], rows_checked=0,
+            skipped=True, skip_reason="stub",
+        )
+        scores = compute_dimension_scores([passed, skipped], dataset="t")
+        # Only the executed check should appear in the bucket
+        completeness_score = next(s for s in scores if s.dimension == DQDimension.COMPLETENESS)
+        assert completeness_score.total_checks == 1
+        assert completeness_score.score == 1.0
 
 
 class TestEvaluateAll:
