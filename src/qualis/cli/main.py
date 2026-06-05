@@ -215,10 +215,15 @@ def check(
         help="Path to the rules directory containing YAML files.",
         show_default=False,
     ),
-    sample: Path = typer.Option(  # noqa: B008
-        ...,
+    sample: Path | None = typer.Option(  # noqa: B008
+        None,
         "--sample",
-        help="Path to a CSV or Parquet sample file to validate.",
+        help=(
+            "Path to a CSV or Parquet sample file to validate. Omit to run "
+            "against the configured adapter (QUALIS_ADAPTER + "
+            "QUALIS_DATABASE_URL), e.g. postgres or the sqlalchemy "
+            "meta-adapter."
+        ),
         show_default=False,
     ),
     fail_on_score: int = typer.Option(
@@ -263,7 +268,7 @@ def check(
         console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' does not exist.")
         raise typer.Exit(1)
 
-    if not sample.is_file():
+    if sample is not None and not sample.is_file():
         console.print(f"[red]Error:[/] Sample path '[cyan]{sample}[/]' is not a file.")
         raise typer.Exit(1)
 
@@ -323,11 +328,15 @@ def report(
         help="Path to the rules directory containing YAML files.",
         show_default=False,
     ),
-    sample: Path = typer.Option(  # noqa: B008
-        ...,
+    sample: Path | None = typer.Option(  # noqa: B008
+        None,
         "--sample",
         "-s",
-        help="Path to a CSV or Parquet sample file to validate.",
+        help=(
+            "Path to a CSV or Parquet sample file to validate. Omit to run "
+            "against the configured adapter (QUALIS_ADAPTER + "
+            "QUALIS_DATABASE_URL)."
+        ),
         show_default=False,
     ),
     format: ReportFormat = typer.Option(  # noqa: A002,B008
@@ -388,7 +397,7 @@ def report(
         console.print(f"[red]Error:[/] Rules path '[cyan]{rules}[/]' does not exist.")
         raise typer.Exit(1)
 
-    if not sample.is_file():
+    if sample is not None and not sample.is_file():
         console.print(f"[red]Error:[/] Sample path '[cyan]{sample}[/]' is not a file.")
         raise typer.Exit(1)
 

@@ -3,6 +3,23 @@
 ## v0.5.0 (unreleased) — Production hardening
 
 ### Added
+- **SQLAlchemy meta-adapter** (`pip install 'qualis[sqlalchemy]'`,
+  `QUALIS_ADAPTER=sqlalchemy`) — every check built from SQLAlchemy Core
+  expressions, so one adapter reaches any engine SQLAlchemy 2.x speaks
+  (MySQL, MSSQL, Oracle, Trino, SQLite, ...). DBAPI drivers are
+  user-supplied; `sqlalchemy` pinned `>=2.0,<3`. Implements the optional
+  violation-sampling capability; deliberately does NOT fake statement
+  timeouts (see the timeout-honesty matrix in `docs/adapters.md`).
+  Proven against SQLite — an engine qualis previously could not reach.
+  See AgDR-0004. (#10)
+- **`qualis.adapters` entry-point registry** — third-party adapter
+  packages register a `factory(settings)` by name and resolve through
+  `QUALIS_ADAPTER` without core changes. The loader
+  (`qualis.plugins.load_entry_points(group, protocol)`) is
+  group-agnostic by design for future plugin surfaces. Built-ins always
+  shadow same-named entry points; `QualisSettings.adapter` widened from
+  a closed `Literal` to an open validated name. qualis's own sqlalchemy
+  adapter registers through this mechanism. (#10)
 - **`--sample-rows N` on `check` and `report`** — failing rules can now
   attach up to N real failing rows (`record_id` + `actual_value`) as
   evidence, fetched via an optional adapter capability
