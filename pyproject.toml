@@ -100,6 +100,7 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM", "TCH", "RUF"]
 
 [dependency-groups]
 dev = [
+    "mutmut>=3.5.0",
     "mypy>=2.1.0",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
@@ -110,3 +111,8 @@ dev = [
 
 [project.entry-points."qualis.adapters"]
 sqlalchemy = "qualis.adapters.sqlalchemy:create_adapter"
+
+[tool.mutmut]
+paths_to_mutate = ["src/qualis/domain/"]
+tests_dir = ["tests/unit/domain/", "tests/unit/engine/"]
+also_copy = ["src/qualis/", "tests/fixtures/"]
