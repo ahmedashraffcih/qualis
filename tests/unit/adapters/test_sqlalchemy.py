@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+import importlib.util
+
+import pytest
+
+_SA_INSTALLED = importlib.util.find_spec("sqlalchemy") is not None
+
+pytestmark = pytest.mark.skipif(not _SA_INSTALLED, reason="sqlalchemy not installed")
+
+"""SQLAlchemy meta-adapter tests, run against in-memory SQLite — an engine
+qualis has NO native adapter for, which is exactly the point: if the checks
+count correctly here, the Core-expression layer is doing the work."""
+
+
+@pytest.fixture()
+def adapter():
+    from qualis.adapters.sqlalchemy.adapter import SQLAlchemyAdapter
+
+    a = SQLAlchemyAdapter("sqlite://")
+    a.execute(
+        "CREATE TABLE accidents ("
+        "id INTEGER, accident_date TEXT, severity_code TEXT, location_id INTEGER)"
+    )
+    rows = [
+        (1, "2024-01-15", "FATAL", 101),
+        (2, None, "SERIOUS", 102),
+        (3, "2024-03-20", "INVALID", 103),
+        (4, "2024-05-10", "MINOR", None),
+        (5, "2024-05-10", "FATAL", -5),
+        (1, "2024-06-01", "PROPERTY", 106),
+    ]
+    for r in rows:
+        a.execute(
+            "INSERT INTO accidents VALUES (:id, :d, :s, :loc)",
+            {"id": r[0], "d": r[1], "s": r[2], "loc": r[3]},
+        )
+    return a
+
+
+class TestChecks:
+    def test_not_null(self, adapter) -> None:
+        result = adapter.check_not_null("", "accidents", "accident_date")
+        assert result == {"null_count": 1, "total_count": 6}
+
+    def test_unique_counts_extra_copies(self, adapter) -> None:
+        result = adapter.check_unique("", "accidents", "id")
+        assert result["duplicate_count"] == 1  # id=1 twice -> one extra copy
+        assert result["total_count"] == 6
+
+    def test_between(self, adapter) -> None:
+        result = adapter.check_between(
+            "", "accidents", "accident_date", "2024-01-01", "2024-05-31"
+        )
+        assert result["out_of_range_count"] == 1  # 2024-06-01
+        assert result["total_count"] == 6
+        assert result["checked"] == 5  # null excluded
+
+    def test_regex(self, adapter) -> None:
+        result = adapter.check_regex("", "accidents", "severity_code", "^[A-Z]+$")
+        assert result["non_matching_count"] == 0
+        result = adapter.check_regex("", "accidents", "severity_code", "^(FATAL|SERIOUS)$")
+        assert result["non_matching_count"] == 3  # INVALID, MINOR, PROPERTY
+
+    def test_in_set(self, adapter) -> None:
+        result = adapter.check_in_set(
+            "", "accidents", "severity_code",
+            ["FATAL", "SERIOUS", "MINOR", "PROPERTY"],
+        )
+        assert result == {"invalid_count": 1, "total_count": 6}
+
+    def test_row_count(self, adapter) -> None:
+        assert adapter.check_row_count("", "accidents") == {"row_count": 6}
+
+    def test_not_negative(self, adapter) -> None:
+        result = adapter.check_not_negative("", "accidents", "location_id")
+        assert result == {"negative_count": 1, "total_count": 6}
+
+    def test_reference_lookup(self, adapter) -> None:
+        result = adapter.check_reference_lookup(
+            "", "accidents", "severity_code",
+            ["FATAL", "SERIOUS", "MINOR", "PROPERTY"],
+        )
+        assert result == {"invalid_count": 1, "total_count": 6}
+
+    def test_table_exists(self, adapter) -> None:
+        assert adapter.table_exists("", "accidents") is True
+        assert adapter.table_exists("", "nope") is False
+
+
+class TestSamples:
+    def test_in_set_sample_carries_value_and_rid(self, adapter) -> None:
+        samples = adapter.fetch_violation_samples(
+            "", "accidents", "severity_code", "in_set",
+            {"values": ["FATAL", "SERIOUS", "MINOR", "PROPERTY"]}, 10,
+        )
+        assert len(samples) == 1
+        assert samples[0]["actual_value"] == "INVALID"
+        assert samples[0]["record_id"] is not None
+
+    def test_limit_respected(self, adapter) -> None:
+        samples = adapter.fetch_violation_samples(
+            "", "accidents", "id", "unique", {}, 1,
+        )
+        assert len(samples) == 1
+        assert samples[0]["actual_value"] == 1
+
+    def test_unsupported_kind_raises(self, adapter) -> None:
+        with pytest.raises(ValueError, match="unsupported sample kind"):
+            adapter.fetch_violation_samples("", "accidents", "id", "row_count", {}, 5)
+
+
+class TestEngineIntegration:
+    def test_rule_engine_runs_through_sqlalchemy(self, adapter) -> None:
+        from qualis.domain.enums import DQDimension, RuleType, Severity
+        from qualis.domain.models import Rule
+        from qualis.domain.params import NotNullParams
+        from qualis.domain.rule_engine import RuleEngine
+
+        rule = Rule(
+            id="r1", name="x", dimension=DQDimension.COMPLETENESS,
+            rule_type=RuleType.ROW_LEVEL, severity=Severity.CRITICAL,
+            dataset="accidents", column="accident_date", check="not_null",
+            params=NotNullParams(),
+        )
+        engine = RuleEngine(adapter, schema="", sample_rows=3)
+        result = engine.evaluate_rule(rule)
+        assert result.violation_count == 1
+        assert result.violations[0].actual_value is None
+        assert result.violations[0].record_id is not None  # real sampled row
+
+
+class TestResolutionPath:
+    def test_settings_resolve_sqlalchemy_via_entry_point(self) -> None:
+        from qualis.bootstrap import resolve_adapter
+        from qualis.config.settings import QualisSettings
+
+        settings = QualisSettings(adapter="sqlalchemy", database_url="sqlite://")
+        adapter = resolve_adapter(settings)
+        assert type(adapter).__name__ == "SQLAlchemyAdapter"
+
+    def test_missing_extra_raises_install_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import qualis.adapters.sqlalchemy.adapter as mod
+
+        monkeypatch.setattr(mod, "_SA_AVAILABLE", False)
+        with pytest.raises(ImportError, match=r"qualis\[sqlalchemy\]"):
+            mod.SQLAlchemyAdapter("sqlite://")
