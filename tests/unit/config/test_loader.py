@@ -297,3 +297,33 @@ def test_duplicate_rule_ids_raise(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="Duplicate rule id"):
         load_rules_from_file(rules_file)
+
+
+class TestConditionValidation:
+    """AgDR-0005: the loader is the condition trust boundary (located errors)."""
+
+    def test_valid_condition_loads(self) -> None:
+        rule = _parse_rule_helper({"condition": "status = 'active'"})
+        assert rule.condition == "status = 'active'"
+
+    def test_invalid_condition_fails_located(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match=r"rule 'r-cond'.*DROP"):
+            _parse_rule_helper({"condition": "1=1; DROP TABLE x"}, rule_id="r-cond")
+
+
+def _parse_rule_helper(extra: dict[str, object], rule_id: str = "r-1"):
+    from qualis.config.loader import _parse_rule
+
+    data: dict[str, object] = {
+        "id": rule_id,
+        "name": "n",
+        "dimension": "completeness",
+        "severity": "critical",
+        "dataset": "d",
+        "column": "c",
+        "check": "not_null",
+    }
+    data.update(extra)
+    return _parse_rule(data)

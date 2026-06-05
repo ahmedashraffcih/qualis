@@ -57,3 +57,25 @@ fakes it:
 
 If a check hangs on an adapter marked **Absent**, that is expected behavior
 documented here — not a bug in the timeout setting.
+
+## Condition-support matrix
+
+`Rule.condition` filters the checked population (AgDR-0005). Conditions are
+parsed against a constrained grammar at rule **load** time — the parser is
+the trust boundary, whatever the condition's source (rule YAML, dbt `meta`).
+A conditioned rule on an adapter without support is **skipped with a visible
+reason**, never run unfiltered.
+
+| Adapter | Conditions | Mechanism |
+| --- | --- | --- |
+| in_memory | **Supported** | AST evaluated in Python per row |
+| duckdb | **Supported** | AST → SQL fragment, values inlined with quote-doubling (grammar-bounded) |
+| postgres | **Supported** | AST → SQL fragment, values as psycopg named binds |
+| sqlalchemy | **Supported** | AST → Core `ColumnElement[bool]`, `&`-composed into counts AND samples |
+| qualis-snowflake / qualis-bigquery | Not yet | Conditioned rules skip with a reason until the siblings implement the kwarg |
+
+Grammar v1: comparisons (`= != <> < <= > >=`), `IS [NOT] NULL`,
+`[NOT] IN (...)`, `AND`/`OR`, parentheses, single-quoted strings (with `''`
+escapes), signed numbers. No functions, casts, subqueries, or cross-column
+comparisons — by design. A condition matching **zero rows** yields a skipped
+check ("condition matched no rows") so vacuous checks cannot inflate scores.

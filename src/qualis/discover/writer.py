@@ -66,6 +66,8 @@ def _rule_to_dict(rule: Rule) -> dict[str, Any]:
     # generated YAML clean for the common case.
     if rule.status != RuleStatus.ACTIVE:
         out["status"] = rule.status.value
+    if rule.condition:
+        out["condition"] = rule.condition
     if rule.metadata:
         out["metadata"] = dict(rule.metadata)
     return out
