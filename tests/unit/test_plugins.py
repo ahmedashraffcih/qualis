@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
-
-import pytest
+from typing import TYPE_CHECKING, Any, Protocol
 
 from qualis.plugins import load_entry_points
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class _GreeterPort(Protocol):
