@@ -314,6 +314,38 @@ class PostgresAdapter:
         negative, total = (row[0], row[1]) if row else (0, 0)
         return {"negative_count": int(negative), "total_count": int(total)}
 
+    def check_reference_join(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        reference_schema: str,
+        reference: str,
+        key_column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
+        """JOIN-mode reference lookup (AgDR-0006) — NULL-safe NOT EXISTS
+        (capability contract, review condition C1); outer FROM is only the
+        aliased target so condition columns bind to ``t`` (C2)."""
+        table_ref = _qualified(schema, table)
+        ref_ref = _qualified(reference_schema, reference)
+        where, binds = self._where(condition)
+        sql = (
+            "SELECT COALESCE(SUM(CASE WHEN "
+            f't."{column}" IS NOT NULL AND NOT EXISTS ('
+            f'SELECT 1 FROM {ref_ref} r WHERE r."{key_column}" = t."{column}"'
+            ") THEN 1 ELSE 0 END), 0) AS invalid_count, "
+            "COUNT(*) AS total_count "
+            f"FROM {table_ref} AS t{where}"
+        )
+        with self._pool.connection() as conn:
+            self._begin_read_only(conn)
+            with conn.cursor() as cur:
+                cur.execute(sql, binds)
+                row = cur.fetchone()
+        invalid, total = (row[0], row[1]) if row else (0, 0)
+        return {"invalid_count": int(invalid), "total_count": int(total)}
+
     def fetch_violation_samples(
         self,
         schema: str,
@@ -364,6 +396,15 @@ class PostgresAdapter:
                 'NOT ("{column}"::text = ANY(%(valid_values)s))'
             )
             bind["valid_values"] = list(params["valid_values"])
+        elif kind == "reference_join":
+            ref_ref = _qualified(
+                str(params["reference_schema"]), str(params["reference"])
+            )
+            key = str(params["key_column"])
+            predicate = (
+                '"{column}" IS NOT NULL AND NOT EXISTS ('
+                f'SELECT 1 FROM {ref_ref} r WHERE r."{key}" = ' + '"{column}")'
+            )
         else:
             raise ValueError(f"unsupported sample kind: {kind!r}")
 

@@ -180,3 +180,42 @@ class TestConditions:
             "", "accidents", "accident_date", "not_null", {}, 10, condition=cond,
         )
         assert samples == []  # the only null date is on the SERIOUS row
+
+
+class TestReferenceJoin:
+    """AgDR-0006 JOIN-mode lookup on duckdb (C1 + C2 proofs)."""
+
+    @pytest.fixture()
+    def ref_adapter(self) -> DuckDBAdapter:
+        a = DuckDBAdapter()
+        a._con.execute("CREATE TABLE orders (id INTEGER, country TEXT, region TEXT)")
+        a._con.execute(
+            "INSERT INTO orders VALUES (1,'US','amer'),(2,'GB','emea'),"
+            "(3,'XX','emea'),(4,NULL,'apac')"
+        )
+        a._con.execute("CREATE TABLE countries (code TEXT, region TEXT)")
+        a._con.execute("INSERT INTO countries VALUES ('US','amer'),('GB','emea'),(NULL,'x')")
+        return a
+
+    def test_null_ref_key_does_not_zero_invalid_count(self, ref_adapter: DuckDBAdapter) -> None:
+        result = ref_adapter.check_reference_join(
+            "", "orders", "country", "", "countries", "code"
+        )
+        assert result == {"invalid_count": 1, "total_count": 4}
+
+    def test_condition_with_colliding_column_name(self, ref_adapter: DuckDBAdapter) -> None:
+        from qualis.domain.condition import parse_condition
+
+        result = ref_adapter.check_reference_join(
+            "", "orders", "country", "", "countries", "code",
+            condition=parse_condition("region = 'emea'"),
+        )
+        assert result == {"invalid_count": 1, "total_count": 2}
+
+    def test_join_sampling(self, ref_adapter: DuckDBAdapter) -> None:
+        samples = ref_adapter.fetch_violation_samples(
+            "", "orders", "country", "reference_join",
+            {"reference_schema": "", "reference": "countries", "key_column": "code"},
+            10,
+        )
+        assert [s["actual_value"] for s in samples] == ["XX"]

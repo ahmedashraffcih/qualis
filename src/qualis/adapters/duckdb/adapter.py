@@ -254,6 +254,39 @@ class DuckDBAdapter:
         invalid, total = (row[0], row[1]) if row else (0, 0)
         return {"invalid_count": int(invalid), "total_count": int(total)}
 
+    def check_reference_join(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        reference_schema: str,
+        reference: str,
+        key_column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
+        """JOIN-mode reference lookup (AgDR-0006).
+
+        Capability contract: NULL-safe ``NOT EXISTS`` correlated subquery —
+        never ``NOT IN (subquery)``, whose three-valued logic zeroes the
+        invalid count the moment the reference key contains a NULL (review
+        condition C1). Outer FROM contains only the aliased target ``t``,
+        so unqualified condition columns bind to the target (C2).
+        """
+        table_ref = _qualified(schema, table)
+        ref_ref = _qualified(reference_schema, reference)
+        where = self._where(condition)
+        sql = (
+            "SELECT COALESCE(SUM(CASE WHEN "
+            f't."{column}" IS NOT NULL AND NOT EXISTS ('
+            f'SELECT 1 FROM {ref_ref} r WHERE r."{key_column}" = t."{column}"'
+            ") THEN 1 ELSE 0 END), 0) AS invalid_count, "
+            "COUNT(*) AS total_count "
+            f"FROM {table_ref} AS t{where}"
+        )
+        row = self._con.execute(sql).fetchone()
+        invalid, total = (row[0], row[1]) if row else (0, 0)
+        return {"invalid_count": int(invalid), "total_count": int(total)}
+
     def fetch_violation_samples(
         self,
         schema: str,
@@ -310,6 +343,15 @@ class DuckDBAdapter:
             predicate = (
                 "actual_value IS NOT NULL AND CAST(actual_value AS VARCHAR) "
                 f"NOT IN ({value_list(params['valid_values'])})"
+            )
+        elif kind == "reference_join":
+            ref_ref = _qualified(
+                str(params["reference_schema"]), str(params["reference"])
+            )
+            key = str(params["key_column"])
+            predicate = (
+                "actual_value IS NOT NULL AND NOT EXISTS ("
+                f'SELECT 1 FROM {ref_ref} r WHERE r."{key}" = actual_value)'
             )
         else:
             raise ValueError(f"unsupported sample kind: {kind!r}")

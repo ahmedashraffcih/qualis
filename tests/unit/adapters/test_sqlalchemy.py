@@ -196,3 +196,53 @@ class TestConditions:
         result = adapter.check_unique("", "accidents", "id", condition=cond)
         assert result["duplicate_count"] == 0
         assert result["total_count"] == 2
+
+
+class TestReferenceJoin:
+    """AgDR-0006 JOIN-mode lookup: NULL-safe NOT EXISTS (C1), namespace (C2)."""
+
+    @pytest.fixture()
+    def ref_adapter(self):
+        from qualis.adapters.sqlalchemy.adapter import SQLAlchemyAdapter
+
+        a = SQLAlchemyAdapter("sqlite://")
+        a.execute("CREATE TABLE orders (id INTEGER, country TEXT, region TEXT)")
+        for row in [(1, "US", "amer"), (2, "GB", "emea"), (3, "XX", "emea"), (4, None, "apac")]:
+            a.execute(
+                "INSERT INTO orders VALUES (:i, :c, :r)",
+                {"i": row[0], "c": row[1], "r": row[2]},
+            )
+        # Reference table WITH a NULL key (the C1 trap) and a colliding
+        # column name `region` (the C2 trap).
+        a.execute("CREATE TABLE countries (code TEXT, region TEXT)")
+        for row in [("US", "amer"), ("GB", "emea"), (None, "x")]:
+            a.execute(
+                "INSERT INTO countries VALUES (:c, :r)", {"c": row[0], "r": row[1]}
+            )
+        return a
+
+    def test_null_ref_key_does_not_zero_invalid_count(self, ref_adapter) -> None:
+        # C1: with NOT IN this would return 0; NOT EXISTS must find XX.
+        result = ref_adapter.check_reference_join(
+            "", "orders", "country", "", "countries", "code"
+        )
+        assert result == {"invalid_count": 1, "total_count": 4}
+
+    def test_condition_with_colliding_column_name(self, ref_adapter) -> None:
+        # C2: `region` exists in BOTH tables; the condition must bind to the
+        # target. emea rows: GB (valid), XX (invalid) -> 1 invalid of 2.
+        from qualis.domain.condition import parse_condition
+
+        result = ref_adapter.check_reference_join(
+            "", "orders", "country", "", "countries", "code",
+            condition=parse_condition("region = 'emea'"),
+        )
+        assert result == {"invalid_count": 1, "total_count": 2}
+
+    def test_join_samples_respect_population_and_predicate(self, ref_adapter) -> None:
+        samples = ref_adapter.fetch_violation_samples(
+            "", "orders", "country", "reference_join",
+            {"reference_schema": "", "reference": "countries", "key_column": "code"},
+            10,
+        )
+        assert [s["actual_value"] for s in samples] == ["XX"]
