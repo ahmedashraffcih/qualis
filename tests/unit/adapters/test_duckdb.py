@@ -148,3 +148,35 @@ class TestFetchViolationSamples:
     def test_unsupported_kind_raises(self, adapter: DuckDBAdapter) -> None:
         with pytest.raises(ValueError, match="unsupported sample kind"):
             adapter.fetch_violation_samples("", "accidents", "id", "row_count", {}, 5)
+
+
+class TestConditions:
+    """Condition pushdown (AgDR-0005) via the literal-style SQL renderer."""
+
+    def test_supports_conditions_flag(self, adapter: DuckDBAdapter) -> None:
+        assert adapter.supports_conditions is True
+
+    def test_condition_filters_population(self, adapter: DuckDBAdapter) -> None:
+        from qualis.domain.condition import parse_condition
+
+        cond = parse_condition("severity_code = 'FATAL'")
+        result = adapter.check_not_null("", "accidents", "accident_date", condition=cond)
+        assert result == {"null_count": 0, "total_count": 2}
+
+    def test_unique_condition_applies_to_inner_scan(self, adapter: DuckDBAdapter) -> None:
+        from qualis.domain.condition import parse_condition
+
+        # id=1 duplicates across FATAL+PROPERTY; FATAL-only population has one
+        cond = parse_condition("severity_code = 'FATAL'")
+        result = adapter.check_unique("", "accidents", "id", condition=cond)
+        assert result["duplicate_count"] == 0
+        assert result["total_count"] == 2
+
+    def test_conditioned_samples_respect_population(self, adapter: DuckDBAdapter) -> None:
+        from qualis.domain.condition import parse_condition
+
+        cond = parse_condition("severity_code != 'SERIOUS'")
+        samples = adapter.fetch_violation_samples(
+            "", "accidents", "accident_date", "not_null", {}, 10, condition=cond,
+        )
+        assert samples == []  # the only null date is on the SERIOUS row

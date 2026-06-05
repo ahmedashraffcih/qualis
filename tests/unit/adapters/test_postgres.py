@@ -323,3 +323,68 @@ class TestFetchViolationSamples:
         adapter, _ = self._adapter()
         with pytest.raises(ValueError, match="unsupported sample kind"):
             adapter.fetch_violation_samples("public", "t", "c", "row_count", {}, 3)
+
+
+class TestConditions:
+    """Condition pushdown (AgDR-0005) via the bind-style SQL renderer."""
+
+    def _adapter(self):
+        from unittest.mock import MagicMock
+
+        from qualis.adapters.postgres.adapter import PostgresAdapter
+
+        mock_pool = MagicMock()
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = (0, 0)
+        mock_cur.fetchall.return_value = []
+
+        mock_pool.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        adapter = PostgresAdapter.__new__(PostgresAdapter)
+        adapter._pool = mock_pool  # type: ignore[attr-defined]
+        adapter._statement_timeout_ms = None  # type: ignore[attr-defined]
+        return adapter, mock_cur
+
+    def test_supports_conditions_flag(self) -> None:
+        from qualis.adapters.postgres.adapter import PostgresAdapter
+
+        assert PostgresAdapter.supports_conditions is True
+
+    def test_condition_appends_where_with_binds(self) -> None:
+        from qualis.domain.condition import parse_condition
+
+        adapter, mock_cur = self._adapter()
+        cond = parse_condition("status = 'active' AND amount > -10")
+        adapter.check_not_null("public", "t", "c", condition=cond)
+        sql, bind = mock_cur.execute.call_args.args
+        assert 'WHERE ("status" = %(cond_0)s AND "amount" > %(cond_1)s)' in sql
+        assert bind["cond_0"] == "active"
+        assert bind["cond_1"] == -10
+
+    def test_unique_condition_filters_inner_scan_and_total(self) -> None:
+        from qualis.domain.condition import parse_condition
+
+        adapter, mock_cur = self._adapter()
+        mock_cur.fetchone.side_effect = [(0,), (0,)]
+        adapter.check_unique("public", "t", "c", condition=parse_condition("x = 1"))
+        first_sql = mock_cur.execute.call_args_list[0].args[0]
+        second_sql = mock_cur.execute.call_args_list[1].args[0]
+        assert 'AND "x" = %(cond_0)s' in first_sql  # inner population scan
+        assert 'WHERE "x" = %(cond_0)s' in second_sql  # conditioned total
+
+    def test_sampling_predicate_gains_condition(self) -> None:
+        from qualis.domain.condition import parse_condition
+
+        adapter, mock_cur = self._adapter()
+        adapter.fetch_violation_samples(
+            "public", "t", "c", "not_null", {}, 5,
+            condition=parse_condition("region = 'EU'"),
+        )
+        sql, bind = mock_cur.execute.call_args.args
+        assert 'AND ("region" = %(cond_0)s)' in sql
+        assert bind["cond_0"] == "EU"
+        assert bind["limit"] == 5

@@ -443,3 +443,105 @@ class TestSampledViolations:
         assert result.violation_count == 3  # check result unaffected
         assert len(result.violations) == 1
         assert result.violations[0].record_id is None  # placeholder fallback
+
+
+def _conditioned_rule(check: str, column: str, params: object, condition: str) -> Rule:
+    return Rule(
+        id="rc-1",
+        name=f"conditioned {check}",
+        dimension=DQDimension.COMPLETENESS,
+        rule_type=RuleType.ROW_LEVEL,
+        severity=Severity.CRITICAL,
+        dataset=DATASET,
+        column=column,
+        check=check,
+        params=params,
+        condition=condition,
+    )
+
+
+class TestConditionedChecks:
+    """Condition pushdown (AgDR-0005): population filtering + honesty rules."""
+
+    def test_condition_filters_population(self, engine: RuleEngine) -> None:
+        # Fixture rows: value None (event 2022-06-01), dup/dup, ok.
+        # Condition restricts to rows after 2022-07-01 -> the null row is
+        # excluded, so the not_null check passes on a 3-row population.
+        rule = _conditioned_rule(
+            "not_null", "value", NotNullParams(), "event_date > '2022-07-01'"
+        )
+        result = engine.evaluate_rule(rule)
+        assert result.passed
+        assert result.violation_count == 0
+        assert result.rows_checked == 3  # population, not table size
+
+    def test_condition_keeps_matching_violations(self, engine: RuleEngine) -> None:
+        rule = _conditioned_rule(
+            "not_null", "value", NotNullParams(), "event_date < '2022-07-01'"
+        )
+        result = engine.evaluate_rule(rule)
+        assert not result.passed
+        assert result.violation_count == 1
+        assert result.rows_checked == 1
+
+    def test_empty_population_is_skipped_not_passed(self, engine: RuleEngine) -> None:
+        rule = _conditioned_rule(
+            "not_null", "value", NotNullParams(), "event_date > '2099-01-01'"
+        )
+        result = engine.evaluate_rule(rule)
+        assert result.skipped
+        assert "no rows" in result.skip_reason
+        assert not result.passed
+
+    def test_unsupported_adapter_is_skipped_with_reason(self) -> None:
+        engine = RuleEngine(_HugeCountAdapter(), schema=SCHEMA)
+        rule = _conditioned_rule(
+            "not_null", "value", NotNullParams(), "status = 'active'"
+        )
+        result = engine.evaluate_rule(rule)
+        assert result.skipped
+        assert "condition" in result.skip_reason
+
+    def test_conditioned_samples_only_contain_matching_rows(
+        self, adapter: InMemoryAdapter
+    ) -> None:
+        # Both 'dup' rows fail uniqueness, but the condition excludes the
+        # 2022-07-15 one — evidence must respect the boundary (review B3).
+        engine = RuleEngine(adapter, schema=SCHEMA, sample_rows=10)
+        rule = _conditioned_rule(
+            "unique", "value", UniqueParams(), "event_date > '2022-08-01'"
+        )
+        result = engine.evaluate_rule(rule)
+        # Population: rows 3 (dup, 2022-08-20) and 4 (ok, 2025-01-01).
+        # Within it, 'dup' appears once -> no duplicates -> check passes.
+        assert result.passed
+        assert result.violations == []
+
+    def test_conditioned_in_set_sample_subset_of_population(
+        self, adapter: InMemoryAdapter
+    ) -> None:
+        engine = RuleEngine(adapter, schema=SCHEMA, sample_rows=10)
+        rule = _conditioned_rule(
+            "in_set",
+            "code",
+            InSetParams(values=["AB-123", "AB-456", "CD-789"]),
+            "event_date < '2022-09-01'",
+        )
+        result = engine.evaluate_rule(rule)
+        assert result.violation_count == 1  # INVALID @ 2022-08-20 in population
+        assert len(result.violations) == 1
+        assert result.violations[0].actual_value == "INVALID"
+
+    def test_row_count_with_condition_counts_population_without_vacuous_skip(
+        self, engine: RuleEngine
+    ) -> None:
+        rule = _conditioned_rule(
+            "row_count",
+            None,
+            RowCountParams(min=0, max=10),
+            "event_date > '2099-01-01'",
+        )
+        result = engine.evaluate_rule(rule)
+        assert not result.skipped  # counting an empty population is the job
+        assert result.passed
+        assert result.rows_checked == 0

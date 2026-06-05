@@ -16,6 +16,15 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from qualis.domain.condition import (
+    And,
+    Comparison,
+    ConditionExpr,
+    InList,
+    IsNull,
+    Or,
+)
+
 try:
     import sqlalchemy as sa
 
@@ -73,9 +82,38 @@ class SQLAlchemyAdapter:
         def _on_connect(dbapi_conn: Any, _record: Any) -> None:
             dbapi_conn.create_function("regexp", 2, _regexp)
 
+    #: Conditioned rules are honoured (AgDR-0005); the AST renders to a
+    #: Core expression that &-composes into both counts and samples.
+    supports_conditions = True
+
     @staticmethod
     def _target(schema: str, table: str) -> Any:
         return sa.table(table, schema=schema or None)
+
+    @classmethod
+    def _render_condition(cls, expr: ConditionExpr) -> sa.ColumnElement[bool]:
+        """AST → Core expression. The output space is the grammar's —
+        column names become quoted identifiers, literals become binds."""
+        if isinstance(expr, Comparison):
+            col: sa.ColumnClause[Any] = sa.column(expr.column)
+            ops = {
+                "=": col.__eq__, "!=": col.__ne__,
+                "<": col.__lt__, "<=": col.__le__,
+                ">": col.__gt__, ">=": col.__ge__,
+            }
+            return ops[expr.op](expr.literal)
+        if isinstance(expr, IsNull):
+            col = sa.column(expr.column)
+            return col.is_not(None) if expr.negated else col.is_(None)
+        if isinstance(expr, InList):
+            col = sa.column(expr.column)
+            rendered = col.in_(list(expr.values))
+            return sa.not_(rendered) if expr.negated else rendered
+        if isinstance(expr, And):
+            return sa.and_(*(cls._render_condition(i) for i in expr.items))
+        if isinstance(expr, Or):
+            return sa.or_(*(cls._render_condition(i) for i in expr.items))
+        raise TypeError(f"unknown condition node {type(expr).__name__}")
 
     # ------------------------------------------------------------------
     # Generic DatabasePort surface
@@ -119,31 +157,48 @@ class SQLAlchemyAdapter:
             row = conn.execute(stmt).one()
         return tuple(int(v or 0) for v in row)
 
+    def _maybe_where(self, stmt: Any, condition: ConditionExpr | None) -> Any:
+        return stmt if condition is None else stmt.where(self._render_condition(condition))
+
     @staticmethod
     def _sum_case(predicate: Any) -> Any:
         # sum(case ...) instead of count(*) FILTER — FILTER is not
         # available on every dialect SQLAlchemy targets.
         return sa.func.coalesce(sa.func.sum(sa.case((predicate, 1), else_=0)), 0)
 
-    def check_not_null(self, schema: str, table: str, column: str) -> dict[str, int]:
+    def check_not_null(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         c: sa.ColumnClause[Any] = sa.column(column)
         null_count, total = self._counts(
-            sa.select(self._sum_case(c.is_(None)), sa.func.count())
-            .select_from(self._target(schema, table))
+            self._maybe_where(
+                sa.select(self._sum_case(c.is_(None)), sa.func.count())
+                .select_from(self._target(schema, table)),
+                condition,
+            )
         )
         return {"null_count": null_count, "total_count": total}
 
-    def check_unique(self, schema: str, table: str, column: str) -> dict[str, int]:
+    def check_unique(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         c: sa.ColumnClause[Any] = sa.column(column)
         # duplicate_count = non-null values minus distinct non-null values
         # ("extra copies" — matches the in-memory adapter's semantics).
-        non_null, distinct, total = self._counts(
-            sa.select(
-                sa.func.count(c),
-                sa.func.count(sa.distinct(c)),
-                sa.func.count(),
-            ).select_from(self._target(schema, table))
-        )
+        stmt = sa.select(
+            sa.func.count(c),
+            sa.func.count(sa.distinct(c)),
+            sa.func.count(),
+        ).select_from(self._target(schema, table))
+        non_null, distinct, total = self._counts(self._maybe_where(stmt, condition))
         return {"duplicate_count": non_null - distinct, "total_count": total}
 
     def check_between(
@@ -153,17 +208,17 @@ class SQLAlchemyAdapter:
         column: str,
         min_val: str,
         max_val: str,
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         c: sa.ColumnClause[Any] = sa.column(column)
         text_c = sa.cast(c, sa.String)
         out_pred = c.is_not(None) & ((text_c < min_val) | (text_c > max_val))
-        out_count, total, checked = self._counts(
-            sa.select(
-                self._sum_case(out_pred),
-                sa.func.count(),
-                sa.func.count(c),
-            ).select_from(self._target(schema, table))
-        )
+        stmt = sa.select(
+            self._sum_case(out_pred),
+            sa.func.count(),
+            sa.func.count(c),
+        ).select_from(self._target(schema, table))
+        out_count, total, checked = self._counts(self._maybe_where(stmt, condition))
         return {"out_of_range_count": out_count, "total_count": total, "checked": checked}
 
     def check_regex(
@@ -172,12 +227,16 @@ class SQLAlchemyAdapter:
         table: str,
         column: str,
         pattern: str,
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         c: sa.ColumnClause[Any] = sa.column(column)
         pred = c.is_not(None) & sa.not_(sa.cast(c, sa.String).regexp_match(pattern))
         non_matching, total = self._counts(
-            sa.select(self._sum_case(pred), sa.func.count())
-            .select_from(self._target(schema, table))
+            self._maybe_where(
+                sa.select(self._sum_case(pred), sa.func.count())
+                .select_from(self._target(schema, table)),
+                condition,
+            )
         )
         return {"non_matching_count": non_matching, "total_count": total}
 
@@ -187,27 +246,41 @@ class SQLAlchemyAdapter:
         table: str,
         column: str,
         values: list[str],
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         c: sa.ColumnClause[Any] = sa.column(column)
         pred = c.is_(None) | sa.cast(c, sa.String).notin_(values)
         invalid, total = self._counts(
-            sa.select(self._sum_case(pred), sa.func.count())
-            .select_from(self._target(schema, table))
+            self._maybe_where(
+                sa.select(self._sum_case(pred), sa.func.count())
+                .select_from(self._target(schema, table)),
+                condition,
+            )
         )
         return {"invalid_count": invalid, "total_count": total}
 
-    def check_row_count(self, schema: str, table: str) -> dict[str, int]:
-        (count,) = self._counts(
-            sa.select(sa.func.count()).select_from(self._target(schema, table))
-        )
+    def check_row_count(
+        self,
+        schema: str,
+        table: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
+        stmt = sa.select(sa.func.count()).select_from(self._target(schema, table))
+        (count,) = self._counts(self._maybe_where(stmt, condition))
         return {"row_count": count}
 
-    def check_not_negative(self, schema: str, table: str, column: str) -> dict[str, int]:
+    def check_not_negative(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         c: sa.ColumnClause[Any] = sa.column(column)
-        negative, total = self._counts(
-            sa.select(self._sum_case(c.is_not(None) & (c < 0)), sa.func.count())
-            .select_from(self._target(schema, table))
-        )
+        stmt = sa.select(
+            self._sum_case(c.is_not(None) & (c < 0)), sa.func.count()
+        ).select_from(self._target(schema, table))
+        negative, total = self._counts(self._maybe_where(stmt, condition))
         return {"negative_count": negative, "total_count": total}
 
     def check_reference_lookup(
@@ -216,12 +289,16 @@ class SQLAlchemyAdapter:
         table: str,
         column: str,
         valid_values: list[str],
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         c: sa.ColumnClause[Any] = sa.column(column)
         pred = c.is_not(None) & sa.cast(c, sa.String).notin_(valid_values)
         invalid, total = self._counts(
-            sa.select(self._sum_case(pred), sa.func.count())
-            .select_from(self._target(schema, table))
+            self._maybe_where(
+                sa.select(self._sum_case(pred), sa.func.count())
+                .select_from(self._target(schema, table)),
+                condition,
+            )
         )
         return {"invalid_count": invalid, "total_count": total}
 
@@ -237,20 +314,18 @@ class SQLAlchemyAdapter:
         kind: str,
         params: dict[str, Any],
         limit: int,
+        condition: ConditionExpr | None = None,
     ) -> list[dict[str, Any]]:
         """Up to *limit* failing rows as evidence — Core predicates mirror
         the count expressions above, so samples are members of the counted
         set. ``record_id`` is a 1-based ``row_number()``."""
         c: sa.ColumnClause[Any] = sa.column(column)
         target = self._target(schema, table)
-        subq = (
-            sa.select(
-                c.label("actual_value"),
-                sa.func.row_number().over().label("rid"),
-            )
-            .select_from(target)
-            .subquery()
-        )
+        population = sa.select(
+            c.label("actual_value"),
+            sa.func.row_number().over().label("rid"),
+        ).select_from(target)
+        subq = self._maybe_where(population, condition).subquery()
         v = subq.c.actual_value
         text_v = sa.cast(v, sa.String)
 
@@ -258,12 +333,13 @@ class SQLAlchemyAdapter:
         if kind == "not_null":
             pred = v.is_(None)
         elif kind == "unique":
-            dups = (
+            dups = self._maybe_where(
                 sa.select(c)
                 .select_from(target)
                 .where(c.is_not(None))
                 .group_by(c)
-                .having(sa.func.count() > 1)
+                .having(sa.func.count() > 1),
+                condition,
             )
             pred = v.is_not(None) & v.in_(dups)
         elif kind == "between":

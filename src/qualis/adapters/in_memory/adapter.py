@@ -3,11 +3,19 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from qualis.domain.condition import evaluate_condition
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from qualis.domain.condition import ConditionExpr
+
 
 class InMemoryAdapter:
+    #: Conditioned rules are honoured (AgDR-0005) — the engine checks this
+    #: flag and skips conditioned rules on adapters that lack it.
+    supports_conditions = True
+
     def __init__(self) -> None:
         self._tables: dict[str, list[dict[str, Any]]] = {}
 
@@ -19,6 +27,17 @@ class InMemoryAdapter:
         if key not in self._tables:
             raise ValueError(f"Table {key} not found")
         return self._tables[key]
+
+    def _population(
+        self,
+        schema: str,
+        table: str,
+        condition: ConditionExpr | None,
+    ) -> list[dict[str, Any]]:
+        rows = self._get_rows(schema, table)
+        if condition is None:
+            return rows
+        return [r for r in rows if evaluate_condition(condition, r)]
 
     def query(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         table_key = self._extract_table_from_sql(sql)
@@ -44,13 +63,25 @@ class InMemoryAdapter:
     def table_exists(self, schema: str, table: str) -> bool:
         return f"{schema}.{table}" in self._tables
 
-    def check_not_null(self, schema: str, table: str, column: str) -> dict[str, int]:
-        rows = self._get_rows(schema, table)
+    def check_not_null(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
+        rows = self._population(schema, table, condition)
         null_count = sum(1 for r in rows if r.get(column) is None)
         return {"null_count": null_count, "total_count": len(rows)}
 
-    def check_unique(self, schema: str, table: str, column: str) -> dict[str, int]:
-        rows = self._get_rows(schema, table)
+    def check_unique(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
+        rows = self._population(schema, table, condition)
         values = [r.get(column) for r in rows if r.get(column) is not None]
         duplicate_count = len(values) - len(set(values))
         return {"duplicate_count": duplicate_count, "total_count": len(rows)}
@@ -62,8 +93,9 @@ class InMemoryAdapter:
         column: str,
         min_val: str,
         max_val: str,
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
-        rows = self._get_rows(schema, table)
+        rows = self._population(schema, table, condition)
         out_count = 0
         checked = 0
         for r in rows:
@@ -81,8 +113,9 @@ class InMemoryAdapter:
         table: str,
         column: str,
         pattern: str,
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
-        rows = self._get_rows(schema, table)
+        rows = self._population(schema, table, condition)
         compiled = re.compile(pattern)
         non_matching = sum(
             1
@@ -97,8 +130,9 @@ class InMemoryAdapter:
         table: str,
         column: str,
         values: list[str],
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
-        rows = self._get_rows(schema, table)
+        rows = self._population(schema, table, condition)
         allowed = set(values)
         invalid_count = sum(
             1
@@ -107,8 +141,13 @@ class InMemoryAdapter:
         )
         return {"invalid_count": invalid_count, "total_count": len(rows)}
 
-    def check_row_count(self, schema: str, table: str) -> dict[str, int]:
-        rows = self._get_rows(schema, table)
+    def check_row_count(
+        self,
+        schema: str,
+        table: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
+        rows = self._population(schema, table, condition)
         return {"row_count": len(rows)}
 
     def check_not_negative(
@@ -116,8 +155,9 @@ class InMemoryAdapter:
         schema: str,
         table: str,
         column: str,
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
-        rows = self._get_rows(schema, table)
+        rows = self._population(schema, table, condition)
         negative_count = sum(
             1
             for r in rows
@@ -131,8 +171,9 @@ class InMemoryAdapter:
         table: str,
         column: str,
         valid_values: list[str],
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
-        rows = self._get_rows(schema, table)
+        rows = self._population(schema, table, condition)
         valid_set = set(valid_values)
         invalid_count = sum(
             1
@@ -149,6 +190,7 @@ class InMemoryAdapter:
         kind: str,
         params: dict[str, Any],
         limit: int,
+        condition: ConditionExpr | None = None,
     ) -> list[dict[str, Any]]:
         """Optional capability: return up to *limit* failing rows as evidence.
 
@@ -156,7 +198,7 @@ class InMemoryAdapter:
         exactly, so sampled rows are always members of the counted set.
         ``record_id`` is the zero-based row index in the table.
         """
-        rows = self._get_rows(schema, table)
+        rows = self._population(schema, table, condition)
 
         def fails(value: Any) -> bool:
             if kind == "not_null":
