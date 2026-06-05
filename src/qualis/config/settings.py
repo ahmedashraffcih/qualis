@@ -11,7 +11,11 @@ class QualisSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="QUALIS_", env_file=".env")
 
     database_url: SecretStr = SecretStr("")
-    adapter: Literal["duckdb", "in_memory", "postgres"] = "duckdb"
+    # Adapter NAME — resolved by qualis.bootstrap.resolve_adapter against
+    # built-ins (duckdb / in_memory / postgres / sqlalchemy) plus the
+    # `qualis.adapters` entry-point group, so the value space is open.
+    # Unknown names fail at resolution with the full list of known names.
+    adapter: str = "duckdb"
     rules_dir: Path = Path("rules")
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["json", "text"] = "text"
