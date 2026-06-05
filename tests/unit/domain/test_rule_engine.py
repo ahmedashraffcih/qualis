@@ -545,3 +545,93 @@ class TestConditionedChecks:
         assert not result.skipped  # counting an empty population is the job
         assert result.passed
         assert result.rows_checked == 0
+
+
+class TestReferenceJoinPushdown:
+    """AgDR-0006: detected co-location, NULL-safe NOT EXISTS, honesty paths."""
+
+    def _join_rule(self, reference_schema: str | None = "refs") -> Rule:
+        from qualis.domain.params import ReferenceLookupParams
+
+        return Rule(
+            id="rj-1",
+            name="join lookup",
+            dimension=DQDimension.COMPLETENESS,
+            rule_type=RuleType.ROW_LEVEL,
+            severity=Severity.CRITICAL,
+            dataset=DATASET,
+            column="code",
+            check="reference_lookup",
+            params=ReferenceLookupParams(
+                reference="codes", key_column="code", reference_schema=reference_schema
+            ),
+        )
+
+    def test_join_capability_used_when_table_exists(self) -> None:
+        calls: list[str] = []
+
+        class _JoinAdapter:
+            def table_exists(self, schema: str, table: str) -> bool:
+                calls.append(f"probe:{schema}.{table}")
+                return True
+
+            def check_reference_join(
+                self, schema, table, column, ref_schema, ref_table, ref_column,
+            ) -> dict[str, int]:
+                calls.append("join")
+                return {"invalid_count": 2, "total_count": 10}
+
+        engine = RuleEngine(_JoinAdapter(), schema=SCHEMA)
+        result = engine.evaluate_rule(self._join_rule())
+        assert result.violation_count == 2
+        assert result.rows_checked == 10
+        assert calls == ["probe:refs.codes", "join"]
+
+    def test_probe_failure_skips_with_located_reason(self) -> None:
+        class _NoTableAdapter:
+            def table_exists(self, schema: str, table: str) -> bool:
+                return False
+
+            def check_reference_join(self, *a):
+                raise AssertionError("must not be called")
+
+        engine = RuleEngine(_NoTableAdapter(), schema=SCHEMA)
+        result = engine.evaluate_rule(self._join_rule())
+        assert result.skipped
+        assert "refs.codes" in result.skip_reason
+        assert "not found" in result.skip_reason
+
+    def test_no_join_capability_skips(self) -> None:
+        class _NoCapAdapter:
+            def table_exists(self, schema: str, table: str) -> bool:
+                return True
+
+        engine = RuleEngine(_NoCapAdapter(), schema=SCHEMA)
+        result = engine.evaluate_rule(self._join_rule())
+        assert result.skipped
+        assert "reference JOIN" in result.skip_reason
+
+    def test_values_path_unchanged_when_schema_unset(self, adapter: InMemoryAdapter) -> None:
+        from qualis.adapters.in_memory.reference_data import InMemoryReferenceData
+
+        ref = InMemoryReferenceData()
+        ref.register("codes", "code", ["AB-123", "AB-456", "CD-789"])
+        engine = RuleEngine(adapter, schema=SCHEMA, reference_data=ref)
+        result = engine.evaluate_rule(self._join_rule(reference_schema=None))
+        assert result.violation_count == 1  # INVALID
+
+    def test_missing_pushdown_method_skips_not_full_column_scan(self) -> None:
+        """The full-column Python fallback is gone (AgDR-0006)."""
+
+        class _BareAdapter:
+            def query(self, sql, params=None):
+                raise AssertionError("full-column fallback must not run")
+
+        from qualis.adapters.in_memory.reference_data import InMemoryReferenceData
+
+        ref = InMemoryReferenceData()
+        ref.register("codes", "code", ["A"])
+        engine = RuleEngine(_BareAdapter(), schema=SCHEMA, reference_data=ref)
+        result = engine.evaluate_rule(self._join_rule(reference_schema=None))
+        assert result.skipped
+        assert "reference_lookup" in result.skip_reason

@@ -432,6 +432,8 @@ class RuleEngine:
     ) -> CheckResult:
         if not isinstance(rule.params, ReferenceLookupParams):
             return self._check_stub(rule)
+        if rule.params.reference_schema is not None:
+            return self._check_reference_join(rule, condition)
         if self._reference_data is None:
             # No reference data adapter wired in — record a violation so
             # the rule isn't silently skipped.
@@ -447,32 +449,23 @@ class RuleEngine:
         valid_values = list(self._reference_data.load_values(
             rule.params.reference, rule.params.key_column,
         ))
-        # Prefer adapter SQL pushdown when available; fall back to in-memory
-        # diff via query() for adapters that don't implement it.
-        if hasattr(self._adapter, "check_reference_lookup"):
-            result = self._adapter.check_reference_lookup(
-                schema, table, column, valid_values,
-                **self._cond_kwargs(condition),
-            )
-            invalid = result.get("invalid_count", 0)
-            total = result.get("total_count", 0)
-            if (vacuous := self._vacuous(rule, condition, total)) is not None:
-                return vacuous
-        elif condition is not None:
-            # The in-memory diff fallback has no row context to filter —
-            # honesty rule: skip rather than silently ignore the condition.
+        # Pushdown is required — the old full-column Python diff fallback is
+        # removed (AgDR-0006): unbounded memory guarding a path no shipped
+        # adapter needs. Honesty skip instead.
+        if not hasattr(self._adapter, "check_reference_lookup"):
             return self._skipped(
                 rule,
-                "reference_lookup fallback cannot apply rule conditions",
+                f"adapter {type(self._adapter).__name__} does not implement "
+                f"reference_lookup pushdown",
             )
-        else:
-            rows = self._adapter.query(f'SELECT "{column}" FROM "{schema}"."{table}"')
-            valid_set = set(valid_values)
-            invalid = sum(
-                1 for r in rows
-                if r.get(column) is not None and r.get(column) not in valid_set
-            )
-            total = len(rows)
+        result = self._adapter.check_reference_lookup(
+            schema, table, column, valid_values,
+            **self._cond_kwargs(condition),
+        )
+        invalid = result.get("invalid_count", 0)
+        total = result.get("total_count", 0)
+        if (vacuous := self._vacuous(rule, condition, total)) is not None:
+            return vacuous
         expected = (
             f"value present in {rule.params.reference}.{rule.params.key_column}"
         )
@@ -482,6 +475,73 @@ class RuleEngine:
                 expected=expected,
                 kind="reference_lookup",
                 sql_params={"valid_values": valid_values},
+                condition=condition,
+            )
+            if invalid
+            else []
+        )
+        return CheckResult(
+            rule=rule, passed=invalid == 0,
+            violation_count=invalid, violations=violations,
+            rows_checked=total,
+        )
+
+    def _check_reference_join(
+        self, rule: Rule, condition: ConditionExpr | None = None
+    ) -> CheckResult:
+        """JOIN-mode reference lookup — detected co-location (AgDR-0006).
+
+        The author opted in via ``reference_schema``; the adapter's
+        ``table_exists`` probe must confirm the reference table actually
+        lives in the checked database. Detection failures skip loudly —
+        silently falling back to the values path would mask a
+        misconfiguration. The capability contract is a NULL-safe
+        ``NOT EXISTS`` correlated subquery (review condition C1).
+        """
+        assert isinstance(rule.params, ReferenceLookupParams)
+        params = rule.params
+        ref_schema = params.reference_schema or ""
+        if not hasattr(self._adapter, "check_reference_join"):
+            return self._skipped(
+                rule,
+                f"adapter {type(self._adapter).__name__} does not support "
+                f"reference JOIN pushdown",
+            )
+        if not self._adapter.table_exists(ref_schema, params.reference):
+            return self._skipped(
+                rule,
+                f"reference table {ref_schema}.{params.reference} "
+                f"not found in the checked database",
+            )
+        schema, table = self._dataset_parts(rule)
+        column = rule.column or ""
+        result: dict[str, int] = self._adapter.check_reference_join(
+            schema,
+            table,
+            column,
+            ref_schema,
+            params.reference,
+            params.key_column,
+            **self._cond_kwargs(condition),
+        )
+        invalid = result.get("invalid_count", 0)
+        total = result.get("total_count", 0)
+        if (vacuous := self._vacuous(rule, condition, total)) is not None:
+            return vacuous
+        expected = (
+            f"value present in {ref_schema}.{params.reference}."
+            f"{params.key_column}"
+        )
+        violations = (
+            self._sample(
+                rule,
+                expected=expected,
+                kind="reference_join",
+                sql_params={
+                    "reference_schema": ref_schema,
+                    "reference": params.reference,
+                    "key_column": params.key_column,
+                },
                 condition=condition,
             )
             if invalid

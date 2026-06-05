@@ -135,9 +135,13 @@ def _parse_params(check: str, parameters: dict[str, Any] | None) -> CheckParams:
                 "check 'reference_lookup' requires both 'reference' and 'key_column' "
                 f"under parameters: got {sorted(params.keys()) or 'no parameters'}"
             )
+        reference_schema = params.get("reference_schema")
         return ReferenceLookupParams(
             reference=str(params["reference"]),
             key_column=str(params["key_column"]),
+            reference_schema=(
+                str(reference_schema) if reference_schema is not None else None
+            ),
         )
     # Unreachable — check has already been validated against CheckType values
     raise ValueError(f"Unhandled check type: {check}")  # pragma: no cover
