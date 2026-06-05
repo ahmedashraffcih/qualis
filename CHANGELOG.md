@@ -3,6 +3,17 @@
 ## v0.5.0 (unreleased) — Production hardening
 
 ### Added
+- **`Rule.condition` now actually filters the checked population** —
+  previously loaded from YAML and silently ignored at execution (and
+  dropped on re-serialization). Conditions are parsed against a small
+  constrained grammar at load time (the trust boundary — no raw SQL ever
+  reaches an adapter, whatever the source), rendered per adapter
+  (Python eval / SQLAlchemy Core / bound or grammar-escaped SQL), and
+  applied to BOTH counts and `--sample-rows` evidence. With a condition,
+  `rows_checked` is the filtered population; a condition matching zero
+  rows yields a skipped check; adapters without support skip conditioned
+  rules with a visible reason. Discovery now round-trips `condition`.
+  See AgDR-0005 and the condition-support matrix in `docs/adapters.md`. (#12)
 - **SQLAlchemy meta-adapter** (`pip install 'qualis[sqlalchemy]'`,
   `QUALIS_ADAPTER=sqlalchemy`) — every check built from SQLAlchemy Core
   expressions, so one adapter reaches any engine SQLAlchemy 2.x speaks

@@ -144,3 +144,20 @@ def test_writer_omits_status_when_active() -> None:
     )
     out = yaml.safe_load(suggestions_to_yaml([suggestion]))
     assert "status" not in out["rules"][0]
+
+
+def test_condition_round_trips() -> None:
+    """AgDR-0005: writer preserves condition (it was silently dropped before)."""
+    from qualis.discover.writer import _rule_to_dict
+    from qualis.domain.enums import DQDimension, RuleType, Severity
+    from qualis.domain.models import Rule
+    from qualis.domain.params import NotNullParams
+
+    rule = Rule(
+        id="r1", name="x", dimension=DQDimension.COMPLETENESS,
+        rule_type=RuleType.ROW_LEVEL, severity=Severity.CRITICAL,
+        dataset="t", column="c", check="not_null", params=NotNullParams(),
+        condition="status = 'active'",
+    )
+    out = _rule_to_dict(rule)
+    assert out["condition"] == "status = 'active'"

@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 
 import yaml
 
+from qualis.domain.condition import ConditionError, parse_condition
 from qualis.domain.enums import CheckType, DQDimension, RuleStatus, RuleType, Severity
 from qualis.domain.models import Rule
 from qualis.domain.params import (
@@ -142,6 +143,25 @@ def _parse_params(check: str, parameters: dict[str, Any] | None) -> CheckParams:
     raise ValueError(f"Unhandled check type: {check}")  # pragma: no cover
 
 
+def _validated_condition(data: dict[str, Any]) -> str | None:
+    """Validate `condition` at the trust boundary (AgDR-0005, load time).
+
+    The error is located — rule id + the offending text — so a bad
+    condition is a one-glance fix instead of a runtime adapter traceback.
+    """
+    condition = data.get("condition")
+    if condition is None:
+        return None
+    try:
+        parse_condition(str(condition))
+    except ConditionError as exc:
+        rule_id = data.get("id", "<no id>")
+        raise ValueError(
+            f"rule {rule_id!r}: invalid condition {condition!r}: {exc}"
+        ) from exc
+    return str(condition)
+
+
 def _parse_rule(data: dict[str, Any]) -> Rule:
     """Parse a single rule dictionary from YAML into a ``Rule`` object."""
     valid_dimensions = [d.value for d in DQDimension]
@@ -184,7 +204,7 @@ def _parse_rule(data: dict[str, Any]) -> Rule:
         column=column,
         check=check_str,
         params=params,
-        condition=data.get("condition"),
+        condition=_validated_condition(data),
         description=str(data.get("description", "")),
         tags=list(data.get("tags", [])),
         status=status,

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 
+from qualis.adapters._condition_sql import render_sql_condition
 from qualis.adapters.duckdb.sql_templates import (
     BETWEEN_SQL,
     IN_SET_SQL,
@@ -13,11 +14,12 @@ from qualis.adapters.duckdb.sql_templates import (
     REGEX_SQL,
     ROW_COUNT_SQL,
     TABLE_EXISTS_SQL,
-    UNIQUE_SQL,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from qualis.domain.condition import ConditionExpr
 
 
 def _qualified(schema: str, table: str) -> str:
@@ -28,6 +30,11 @@ def _qualified(schema: str, table: str) -> str:
 
 
 class DuckDBAdapter:
+    #: Conditioned rules are honoured (AgDR-0005) via the literal-style
+    #: SQL renderer — safe because the fragment's value space is the
+    #: parsed grammar's, never raw user text.
+    supports_conditions = True
+
     """DuckDB-backed implementation of ``DatabasePort``.
 
     Parameters
@@ -100,32 +107,53 @@ class DuckDBAdapter:
         ).fetchone()
         return bool(result and result[0] > 0)
 
+
+    @staticmethod
+    def _where(condition: ConditionExpr | None, *, prefix: str = " WHERE ") -> str:
+        if condition is None:
+            return ""
+        fragment, _ = render_sql_condition(condition, "literal")
+        return f"{prefix}{fragment}"
+
     # ------------------------------------------------------------------
     # Check methods
     # ------------------------------------------------------------------
 
-    def check_not_null(self, schema: str, table: str, column: str) -> dict[str, int]:
+    def check_not_null(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = NOT_NULL_SQL.format(column=column, table=table_ref)
+        sql += self._where(condition)
         row = self._con.execute(sql).fetchone()
         null_count, total_count = (row[0], row[1]) if row else (0, 0)
         return {"null_count": int(null_count), "total_count": int(total_count)}
 
-    def check_unique(self, schema: str, table: str, column: str) -> dict[str, int]:
+    def check_unique(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
-        sql = UNIQUE_SQL.format(column=column, table=table_ref)
+        where = self._where(condition)
+        # Condition applies to the inner population scan (the review's
+        # HAVING-subquery trap, AgDR-0005) and to the total.
+        sql = (
+            "SELECT COUNT(*) AS duplicate_count FROM ("
+            f'  SELECT "{column}" FROM {table_ref}{where} '
+            f'  GROUP BY "{column}" HAVING COUNT(*) > 1'
+            ") dup"
+        )
         row = self._con.execute(sql).fetchone()
-        if row is None:
-            # No duplicate groups at all — zero duplicates
-            total_row = self._con.execute(
-                f"SELECT COUNT(*) FROM {table_ref}"
-            ).fetchone()
-            total = int(total_row[0]) if total_row else 0
-            return {"duplicate_count": 0, "total_count": total}
-        dup_count = int(row[0])
-        # Re-query total so it is accurate regardless of UNIQUE_SQL shape
+        dup_count = int(row[0]) if row else 0
         total_row = self._con.execute(
-            f"SELECT COUNT(*) FROM {table_ref}"
+            f"SELECT COUNT(*) FROM {table_ref}{where}"
         ).fetchone()
         total = int(total_row[0]) if total_row else 0
         return {"duplicate_count": dup_count, "total_count": total}
@@ -137,11 +165,13 @@ class DuckDBAdapter:
         column: str,
         min_val: str,
         max_val: str,
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = BETWEEN_SQL.format(
             column=column, table=table_ref, min_val=min_val, max_val=max_val
         )
+        sql += self._where(condition)
         row = self._con.execute(sql).fetchone()
         out_of_range, total = (row[0], row[1]) if row else (0, 0)
         return {"out_of_range_count": int(out_of_range), "total_count": int(total)}
@@ -152,9 +182,11 @@ class DuckDBAdapter:
         table: str,
         column: str,
         pattern: str,
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = REGEX_SQL.format(column=column, table=table_ref, pattern=pattern)
+        sql += self._where(condition)
         row = self._con.execute(sql).fetchone()
         non_matching, total = (row[0], row[1]) if row else (0, 0)
         return {"non_matching_count": int(non_matching), "total_count": int(total)}
@@ -165,25 +197,40 @@ class DuckDBAdapter:
         table: str,
         column: str,
         values: list[str],
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         escaped = [v.replace("'", "''") for v in values]
         value_list = ", ".join(f"'{v}'" for v in escaped)
         sql = IN_SET_SQL.format(column=column, table=table_ref, value_list=value_list)
+        sql += self._where(condition)
         row = self._con.execute(sql).fetchone()
         invalid, total = (row[0], row[1]) if row else (0, 0)
         return {"invalid_count": int(invalid), "total_count": int(total)}
 
-    def check_row_count(self, schema: str, table: str) -> dict[str, int]:
+    def check_row_count(
+        self,
+        schema: str,
+        table: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = ROW_COUNT_SQL.format(table=table_ref)
+        sql += self._where(condition)
         row = self._con.execute(sql).fetchone()
         count = int(row[0]) if row else 0
         return {"row_count": count}
 
-    def check_not_negative(self, schema: str, table: str, column: str) -> dict[str, int]:
+    def check_not_negative(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = NOT_NEGATIVE_SQL.format(column=column, table=table_ref)
+        sql += self._where(condition)
         row = self._con.execute(sql).fetchone()
         negative, total = (row[0], row[1]) if row else (0, 0)
         return {"negative_count": int(negative), "total_count": int(total)}
@@ -194,6 +241,7 @@ class DuckDBAdapter:
         table: str,
         column: str,
         valid_values: list[str],
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         escaped = [v.replace("'", "''") for v in valid_values]
@@ -201,6 +249,7 @@ class DuckDBAdapter:
         sql = REFERENCE_LOOKUP_SQL.format(
             column=column, table=table_ref, value_list=value_list,
         )
+        sql += self._where(condition)
         row = self._con.execute(sql).fetchone()
         invalid, total = (row[0], row[1]) if row else (0, 0)
         return {"invalid_count": int(invalid), "total_count": int(total)}
@@ -213,6 +262,7 @@ class DuckDBAdapter:
         kind: str,
         params: dict[str, Any],
         limit: int,
+        condition: ConditionExpr | None = None,
     ) -> list[dict[str, Any]]:
         """Optional capability: return up to *limit* failing rows as evidence.
 
@@ -232,10 +282,11 @@ class DuckDBAdapter:
         if kind == "not_null":
             predicate = "actual_value IS NULL"
         elif kind == "unique":
+            inner_condition = self._where(condition, prefix=" AND ")
             predicate = (
                 "actual_value IS NOT NULL AND actual_value IN ("
                 f'SELECT "{column}" FROM {table_ref} '
-                f'WHERE "{column}" IS NOT NULL '
+                f'WHERE "{column}" IS NOT NULL{inner_condition} '
                 f'GROUP BY "{column}" HAVING COUNT(*) > 1)'
             )
         elif kind == "between":
@@ -263,10 +314,11 @@ class DuckDBAdapter:
         else:
             raise ValueError(f"unsupported sample kind: {kind!r}")
 
+        where = self._where(condition)
         sql = (
             "SELECT actual_value, rid FROM ("
             f'SELECT "{column}" AS actual_value, row_number() OVER () AS rid '
-            f"FROM {table_ref}) q WHERE {predicate} LIMIT {int(limit)}"
+            f"FROM {table_ref}{where}) q WHERE {predicate} LIMIT {int(limit)}"
         )
         rows = self._con.execute(sql).fetchall()
         return [{"actual_value": r[0], "record_id": r[1]} for r in rows]

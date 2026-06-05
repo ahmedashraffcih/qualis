@@ -145,3 +145,54 @@ class TestResolutionPath:
         monkeypatch.setattr(mod, "_SA_AVAILABLE", False)
         with pytest.raises(ImportError, match=r"qualis\[sqlalchemy\]"):
             mod.SQLAlchemyAdapter("sqlite://")
+
+
+class TestConditions:
+    """Condition pushdown (AgDR-0005) through Core expressions."""
+
+    def _rule_engine(self, adapter, sample_rows=None):
+        from qualis.domain.rule_engine import RuleEngine
+
+        return RuleEngine(adapter, schema="", sample_rows=sample_rows)
+
+    def test_supports_conditions_flag(self, adapter) -> None:
+        assert adapter.supports_conditions is True
+
+    def test_condition_filters_count_population(self, adapter) -> None:
+        from qualis.domain.condition import parse_condition
+
+        cond = parse_condition("severity_code = 'FATAL'")
+        result = adapter.check_not_null("", "accidents", "accident_date", condition=cond)
+        assert result == {"null_count": 0, "total_count": 2}  # two FATAL rows
+
+    def test_conditioned_samples_respect_population(self, adapter) -> None:
+        from qualis.domain.condition import parse_condition
+
+        # Without condition: 1 null date (row id=2, SERIOUS). With a
+        # condition excluding SERIOUS rows the sample must be empty.
+        cond = parse_condition("severity_code != 'SERIOUS'")
+        samples = adapter.fetch_violation_samples(
+            "", "accidents", "accident_date", "not_null", {}, 10, condition=cond,
+        )
+        assert samples == []
+
+    def test_in_with_numbers_and_reserved_word_column(self, adapter) -> None:
+        from qualis.domain.condition import parse_condition
+
+        adapter.execute('CREATE TABLE t2 ("order" INTEGER, v TEXT)')
+        adapter.execute('INSERT INTO t2 VALUES (1, NULL)')
+        adapter.execute('INSERT INTO t2 VALUES (2, NULL)')
+        cond = parse_condition("order IN (1, 3)")  # reserved-word column (C4)
+        result = adapter.check_not_null("", "t2", "v", condition=cond)
+        assert result == {"null_count": 1, "total_count": 1}
+
+    def test_unique_condition_applies_to_inner_scan(self, adapter) -> None:
+        from qualis.domain.condition import parse_condition
+
+        # id=1 duplicates across FATAL + PROPERTY rows; restricting the
+        # population to FATAL rows leaves one id=1 -> no duplicates (the
+        # review's HAVING-subquery trap, B2).
+        cond = parse_condition("severity_code = 'FATAL'")
+        result = adapter.check_unique("", "accidents", "id", condition=cond)
+        assert result["duplicate_count"] == 0
+        assert result["total_count"] == 2

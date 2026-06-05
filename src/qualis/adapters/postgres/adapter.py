@@ -13,6 +13,7 @@ try:
 except ImportError:  # pragma: no cover
     _PSYCOPG_AVAILABLE = False
 
+from qualis.adapters._condition_sql import render_sql_condition
 from qualis.adapters.postgres.sql_templates import (
     BETWEEN_SQL,
     IN_SET_SQL,
@@ -27,6 +28,8 @@ from qualis.adapters.postgres.sql_templates import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from qualis.domain.condition import ConditionExpr
 
 
 def _qualified(schema: str, table: str) -> str:
@@ -45,6 +48,10 @@ def _rows_as_dicts(cursor: Any) -> list[dict[str, Any]]:
 
 
 class PostgresAdapter:
+    #: Conditioned rules are honoured (AgDR-0005) via the bind-style SQL
+    #: renderer (values always travel as psycopg named parameters).
+    supports_conditions = True
+
     """PostgreSQL-backed implementation of ``DatabasePort``.
 
     Requires the ``psycopg[binary]`` and ``psycopg-pool`` optional dependencies
@@ -143,32 +150,63 @@ class PostgresAdapter:
             row = cur.fetchone()
         return bool(row and row[0] > 0)
 
+
+    @staticmethod
+    def _where(
+        condition: ConditionExpr | None, *, prefix: str = " WHERE "
+    ) -> tuple[str, dict[str, Any]]:
+        if condition is None:
+            return "", {}
+        fragment, binds = render_sql_condition(condition, "bind")
+        return f"{prefix}{fragment}", binds
+
     # ------------------------------------------------------------------
     # Check methods — all run inside a READ ONLY transaction
     # ------------------------------------------------------------------
 
-    def check_not_null(self, schema: str, table: str, column: str) -> dict[str, int]:
+    def check_not_null(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = NOT_NULL_SQL.format(column=column, table=table_ref)
+        where, binds = self._where(condition)
+        sql += where
         with self._pool.connection() as conn:
             self._begin_read_only(conn)
             with conn.cursor() as cur:
-                cur.execute(sql)
+                cur.execute(sql, binds)
                 row = cur.fetchone()
         null_count, total_count = (row[0], row[1]) if row else (0, 0)
         return {"null_count": int(null_count), "total_count": int(total_count)}
 
-    def check_unique(self, schema: str, table: str, column: str) -> dict[str, int]:
+    def check_unique(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = UNIQUE_SQL.format(column=column, table=table_ref)
+        # Inner population scan already has WHERE IS NOT NULL — the condition
+        # joins it with AND (the review's HAVING-subquery trap, AgDR-0005).
+        inner, binds = self._where(condition, prefix=" AND ")
+        sql = sql.replace('IS NOT NULL\n', f'IS NOT NULL{inner}\n', 1)
+        total_where, total_binds = self._where(condition)
         with self._pool.connection() as conn:
             self._begin_read_only(conn)
             with conn.cursor() as cur:
-                cur.execute(sql)
+                cur.execute(sql, binds)
                 row = cur.fetchone()
                 dup_count = int(row[0]) if row else 0
                 # Re-query total so it is accurate regardless of UNIQUE_SQL shape
-                cur.execute(f"SELECT COUNT(*) FROM {table_ref}")
+                cur.execute(
+                    f"SELECT COUNT(*) FROM {table_ref}{total_where}", total_binds
+                )
                 total_row = cur.fetchone()
         total = int(total_row[0]) if total_row else 0
         return {"duplicate_count": dup_count, "total_count": total}
@@ -180,13 +218,16 @@ class PostgresAdapter:
         column: str,
         min_val: str,
         max_val: str,
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = BETWEEN_SQL.format(column=column, table=table_ref)
+        where, binds = self._where(condition)
+        sql = sql.rstrip() + where
         with self._pool.connection() as conn:
             self._begin_read_only(conn)
             with conn.cursor() as cur:
-                cur.execute(sql, {"min": min_val, "max": max_val})
+                cur.execute(sql, {"min": min_val, "max": max_val, **binds})
                 row = cur.fetchone()
         out_of_range, total, checked = (row[0], row[1], row[2]) if row else (0, 0, 0)
         return {
@@ -201,13 +242,16 @@ class PostgresAdapter:
         table: str,
         column: str,
         pattern: str,
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = REGEX_SQL.format(column=column, table=table_ref)
+        where, binds = self._where(condition)
+        sql = sql.rstrip() + where
         with self._pool.connection() as conn:
             self._begin_read_only(conn)
             with conn.cursor() as cur:
-                cur.execute(sql, {"pattern": pattern})
+                cur.execute(sql, {"pattern": pattern, **binds})
                 row = cur.fetchone()
         non_matching, total = (row[0], row[1]) if row else (0, 0)
         return {"non_matching_count": int(non_matching), "total_count": int(total)}
@@ -218,35 +262,54 @@ class PostgresAdapter:
         table: str,
         column: str,
         values: list[str],
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = IN_SET_SQL.format(column=column, table=table_ref)
+        where, binds = self._where(condition)
+        sql = sql.rstrip() + where
         with self._pool.connection() as conn:
             self._begin_read_only(conn)
             with conn.cursor() as cur:
-                cur.execute(sql, {"values": values})
+                cur.execute(sql, {"values": values, **binds})
                 row = cur.fetchone()
         invalid, total = (row[0], row[1]) if row else (0, 0)
         return {"invalid_count": int(invalid), "total_count": int(total)}
 
-    def check_row_count(self, schema: str, table: str) -> dict[str, int]:
+    def check_row_count(
+        self,
+        schema: str,
+        table: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = ROW_COUNT_SQL.format(table=table_ref)
+        where, binds = self._where(condition)
+        # ROW_COUNT_SQL ends with a newline — keep WHERE on the same statement
+        sql = sql.rstrip() + where
         with self._pool.connection() as conn:
             self._begin_read_only(conn)
             with conn.cursor() as cur:
-                cur.execute(sql)
+                cur.execute(sql, binds)
                 row = cur.fetchone()
         count = int(row[0]) if row else 0
         return {"row_count": count}
 
-    def check_not_negative(self, schema: str, table: str, column: str) -> dict[str, int]:
+    def check_not_negative(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = NOT_NEGATIVE_SQL.format(column=column, table=table_ref)
+        where, binds = self._where(condition)
+        sql += where
         with self._pool.connection() as conn:
             self._begin_read_only(conn)
             with conn.cursor() as cur:
-                cur.execute(sql)
+                cur.execute(sql, binds)
                 row = cur.fetchone()
         negative, total = (row[0], row[1]) if row else (0, 0)
         return {"negative_count": int(negative), "total_count": int(total)}
@@ -259,6 +322,7 @@ class PostgresAdapter:
         kind: str,
         params: dict[str, Any],
         limit: int,
+        condition: ConditionExpr | None = None,
     ) -> list[dict[str, Any]]:
         """Optional capability: return up to *limit* failing rows as evidence.
 
@@ -304,9 +368,13 @@ class PostgresAdapter:
             raise ValueError(f"unsupported sample kind: {kind!r}")
 
         table_ref = _qualified(schema, table)
+        cond_clause, cond_binds = self._where(condition, prefix=" AND (")
+        if cond_clause:
+            cond_clause += ")"
+        bind.update(cond_binds)
         sql = (
             'SELECT "{column}" AS actual_value, ctid::text AS rid '
-            "FROM {table} WHERE " + predicate + " LIMIT %(limit)s"
+            "FROM {table} WHERE " + predicate + cond_clause + " LIMIT %(limit)s"
         ).format(column=column, table=table_ref)
         with self._pool.connection() as conn:
             self._begin_read_only(conn)
@@ -321,13 +389,16 @@ class PostgresAdapter:
         table: str,
         column: str,
         valid_values: list[str],
+        condition: ConditionExpr | None = None,
     ) -> dict[str, int]:
         table_ref = _qualified(schema, table)
         sql = REFERENCE_LOOKUP_SQL.format(column=column, table=table_ref)
+        where, binds = self._where(condition)
+        sql = sql.rstrip() + where
         with self._pool.connection() as conn:
             self._begin_read_only(conn)
             with conn.cursor() as cur:
-                cur.execute(sql, {"valid_values": valid_values})
+                cur.execute(sql, {"valid_values": valid_values, **binds})
                 row = cur.fetchone()
         invalid, total = (row[0], row[1]) if row else (0, 0)
         return {"invalid_count": int(invalid), "total_count": int(total)}
