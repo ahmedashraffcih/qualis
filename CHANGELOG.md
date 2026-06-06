@@ -18,11 +18,6 @@ reaches every engine SQLAlchemy 2.x speaks.
   composes with rule conditions and `--sample-rows` evidence. See
   AgDR-0006. (#14)
 
-### Removed
-- **The reference_lookup full-column Python fallback.** Adapters without
-  the `check_reference_lookup` capability now skip the rule with a
-  visible reason instead of pulling every target value into Python for a
-  set diff (unbounded memory; no shipped adapter used the path). (#14)
 - **`Rule.condition` now actually filters the checked population** —
   previously loaded from YAML and silently ignored at execution (and
   dropped on re-serialization). Conditions are parsed against a small
@@ -64,6 +59,13 @@ reaches every engine SQLAlchemy 2.x speaks.
   it via `SET LOCAL statement_timeout` inside each check's READ ONLY
   transaction, so one slow table can no longer hang a whole run. DuckDB
   has no per-statement timeout and documents that limitation. (#8)
+
+### Removed
+
+- **The reference_lookup full-column Python fallback.** Adapters without
+  the `check_reference_lookup` capability now skip the rule with a
+  visible reason instead of pulling every target value into Python for a
+  set diff (unbounded memory; no shipped adapter used the path). (#14)
 
 ### Fixed
 - **`CheckResult.violations` is now a bounded sample, not one placeholder
