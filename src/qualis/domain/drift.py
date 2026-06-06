@@ -11,6 +11,14 @@ the current value, the relative change, and a 4-level severity. Findings
 are emitted ONCE per (table, column, metric) regardless of how many
 rules reference the column — the affected rule_ids are attached so users
 can see which rules' assumptions broke.
+
+Schema changes are drift too (a silently altered table must not pass):
+    column_dropped — CRITICAL: a baseline column is missing from the
+                     current profile; every rule referencing it is attached
+    column_added   — NOTICE: a column not present at snapshot time
+    type_changed   — WARNING: the inferred type flipped (likely affects
+                     rule validity — e.g. integer → string breaks between)
+A rename has no inference in v1 — it reports as one drop + one add.
 """
 
 from __future__ import annotations
@@ -71,6 +79,23 @@ def compare_columns(
 ) -> list[DriftFinding]:
     """Yield one finding per drifting metric between baseline and current."""
     findings: list[DriftFinding] = []
+
+    # Schema-level signal first: a type flip likely invalidates every rule
+    # on the column, so it leads the column's findings.
+    if baseline.inferred_type != current.inferred_type:
+        findings.append(
+            DriftFinding(
+                table=table,
+                column=baseline.column,
+                metric="type_changed",
+                baseline=baseline.inferred_type,
+                current=current.inferred_type,
+                relative_change=None,
+                severity=DriftSeverity.WARNING,
+                affected_rules=affected_rules,
+                note="inferred type changed since snapshot",
+            )
+        )
 
     for metric, base_v, cur_v in (
         ("null_fraction", baseline.null_fraction, current.null_fraction),
@@ -161,6 +186,21 @@ def compare_snapshots(
     for base_col in baseline.columns:
         cur_col = current_by_name.get(base_col.column)
         if cur_col is None:
+            # A disappeared column is the loudest schema drift there is —
+            # never skip it silently (that was the pre-v0.6 behaviour).
+            findings.append(
+                DriftFinding(
+                    table=baseline.table,
+                    column=base_col.column,
+                    metric="column_dropped",
+                    baseline=base_col.inferred_type,
+                    current="absent",
+                    relative_change=None,
+                    severity=DriftSeverity.CRITICAL,
+                    affected_rules=rules_by_column.get(base_col.column, ()),
+                    note="column missing from current profile",
+                )
+            )
             continue
         findings.extend(
             compare_columns(
@@ -168,6 +208,25 @@ def compare_snapshots(
                 baseline=base_col,
                 current=cur_col,
                 affected_rules=rules_by_column.get(base_col.column, ()),
+            )
+        )
+
+    # Second pass: columns present now that weren't at snapshot time.
+    baseline_names = {c.column for c in baseline.columns}
+    for cur_col in current.columns:
+        if cur_col.column in baseline_names:
+            continue
+        findings.append(
+            DriftFinding(
+                table=baseline.table,
+                column=cur_col.column,
+                metric="column_added",
+                baseline="absent",
+                current=cur_col.inferred_type,
+                relative_change=None,
+                severity=DriftSeverity.NOTICE,
+                affected_rules=rules_by_column.get(cur_col.column, ()),
+                note="column not present at snapshot time",
             )
         )
     return findings

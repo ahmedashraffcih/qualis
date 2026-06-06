@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Schema-change drift** — `qualis drift` now reports schema changes as
+  findings instead of silently skipping them: `column_dropped` (CRITICAL,
+  with every rule referencing the column attached), `column_added`
+  (NOTICE), and `type_changed` (WARNING, e.g. integer → string). A rename
+  reports as one drop + one add (no rename inference in v1). Zero new
+  database queries — computed entirely from data already captured in
+  profile snapshots. (#18)
+
+### Fixed
+- `compare_snapshots` previously dropped disappeared columns from the
+  diff without a trace — a silent correctness failure inside the drift
+  detector itself. Disappeared columns are now CRITICAL findings. (#18)
+
 ## v0.5.0 (2026-06-06) — Production hardening
 
 Qualis is now safe at production scale: bounded memory on millions of
