@@ -138,20 +138,98 @@ def test_findings_carry_affected_rules() -> None:
     assert findings[0].affected_rules == ("DQ-001", "DQ-002")
 
 
-def test_compare_snapshots_skips_columns_missing_in_current() -> None:
-    base = ProfileSnapshot(
-        table="t",
+def make_snapshot(*cols: ColumnSnapshot, table: str = "t") -> ProfileSnapshot:
+    return ProfileSnapshot(
+        table=table,
         captured_at="2026-01-01T00:00:00+00:00",
         row_count=100,
-        columns=(make_col(name="email"), make_col(name="phone")),
+        columns=cols,
     )
-    current = ProfileSnapshot(
-        table="t",
-        captured_at="2026-06-01T00:00:00+00:00",
-        row_count=100,
-        columns=(make_col(name="email"),),
-    )
+
+
+def test_dropped_column_is_critical_finding() -> None:
+    """Regression for the silent skip: a column missing from the current
+    profile used to be dropped from the diff without a trace."""
+    base = make_snapshot(make_col(name="email"), make_col(name="phone"))
+    current = make_snapshot(make_col(name="email"))
     findings = compare_snapshots(base, current)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.metric == "column_dropped"
+    assert f.column == "phone"
+    assert f.severity == DriftSeverity.CRITICAL
+    assert f.relative_change is None
+    assert f.current == "absent"
+
+
+def test_added_column_is_notice_finding() -> None:
+    base = make_snapshot(make_col(name="email"))
+    current = make_snapshot(make_col(name="email"), make_col(name="loyalty_tier"))
+    findings = compare_snapshots(base, current)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.metric == "column_added"
+    assert f.column == "loyalty_tier"
+    assert f.severity == DriftSeverity.NOTICE
+    assert f.relative_change is None
+    assert f.baseline == "absent"
+
+
+def test_type_change_is_warning_finding() -> None:
+    base = make_col(name="zip", inferred_type="integer")
+    current = make_col(name="zip", inferred_type="string")
+    findings = [f for f in compare_columns("t", base, current) if f.metric == "type_changed"]
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.severity == DriftSeverity.WARNING
+    assert f.baseline == "integer"
+    assert f.current == "string"
+    assert f.relative_change is None
+
+
+def test_type_change_surfaces_through_compare_snapshots() -> None:
+    base = make_snapshot(make_col(name="zip", inferred_type="integer"))
+    current = make_snapshot(make_col(name="zip", inferred_type="string"))
+    findings = [f for f in compare_snapshots(base, current) if f.metric == "type_changed"]
+    assert len(findings) == 1
+
+
+def test_dropped_column_carries_affected_rules() -> None:
+    base = make_snapshot(make_col(name="phone"))
+    current = make_snapshot()
+    findings = compare_snapshots(base, current, rules_by_column={"phone": ("DQ-007",)})
+    assert findings[0].metric == "column_dropped"
+    assert findings[0].affected_rules == ("DQ-007",)
+
+
+def test_empty_current_reports_all_columns_dropped() -> None:
+    base = make_snapshot(make_col(name="a"), make_col(name="b"))
+    current = make_snapshot()
+    findings = compare_snapshots(base, current)
+    assert [f.column for f in findings] == ["a", "b"]
+    assert all(f.metric == "column_dropped" for f in findings)
+
+
+def test_empty_baseline_reports_all_columns_added() -> None:
+    base = make_snapshot()
+    current = make_snapshot(make_col(name="a"), make_col(name="b"))
+    findings = compare_snapshots(base, current)
+    assert [f.column for f in findings] == ["a", "b"]
+    assert all(f.metric == "column_added" for f in findings)
+
+
+def test_rename_reports_one_drop_and_one_add() -> None:
+    """No rename inference in v1: a rename is reported as drop + add."""
+    base = make_snapshot(make_col(name="phone"))
+    current = make_snapshot(make_col(name="phone_number"))
+    findings = compare_snapshots(base, current)
+    metrics = {f.metric: f.column for f in findings}
+    assert metrics == {"column_dropped": "phone", "column_added": "phone_number"}
+
+
+def test_identical_schemas_produce_no_schema_findings() -> None:
+    base = make_snapshot(make_col(name="email"), make_col(name="phone"))
+    findings = compare_snapshots(base, base)
     assert findings == []
 
 
