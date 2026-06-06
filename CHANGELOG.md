@@ -1,6 +1,12 @@
 # Changelog
 
-## v0.5.0 (unreleased) — Production hardening
+## v0.5.0 (2026-06-06) — Production hardening
+
+Qualis is now safe at production scale: bounded memory on millions of
+failing rows, real statement timeouts, row-level evidence on demand,
+population-scoped rule conditions behind a parsed trust boundary,
+in-database reference validation, and a SQLAlchemy meta-adapter that
+reaches every engine SQLAlchemy 2.x speaks.
 
 ### Added
 - **Reference JOIN pushdown with detected co-location** — set
