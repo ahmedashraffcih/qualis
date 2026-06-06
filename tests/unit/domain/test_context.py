@@ -91,3 +91,30 @@ class TestDatasetContext:
         )
         ctx = d.get_column("code")
         assert ctx.sentinels[0].value == "0"
+
+
+class TestProvenanceContext:
+    def test_defaults_to_none_fields(self) -> None:
+        from qualis.domain.context import ProvenanceContext
+
+        p = ProvenanceContext()
+        assert p.model_id is None
+        assert p.checkpoint is None
+
+    def test_construction(self) -> None:
+        from qualis.domain.context import ProvenanceContext
+
+        p = ProvenanceContext(model_id="claude-opus-4-8", checkpoint="2026-05-30")
+        assert p.model_id == "claude-opus-4-8"
+        assert p.checkpoint == "2026-05-30"
+
+    def test_frozen(self) -> None:
+        from qualis.domain.context import ProvenanceContext
+
+        p = ProvenanceContext(model_id="m")
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            p.model_id = "other"  # type: ignore[misc]
+
+    def test_dataset_context_provenance_defaults_to_none(self) -> None:
+        ctx = DatasetContext(dataset="t")
+        assert ctx.provenance is None

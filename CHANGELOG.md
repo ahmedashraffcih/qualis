@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **Provenance context** — `context.yaml` accepts an optional
+  `provenance: {model_id, checkpoint}` block recording which model
+  produced a machine-generated dataset, so drift findings can be
+  correlated with checkpoint changes by the reader. Descriptive-only:
+  nothing in the engine consumes these fields and no SQL is built from
+  them. Namespaced under `provenance:` so future provenance fields
+  never collide with dataset-level keys. (#19)
 - **Schema-change drift** — `qualis drift` now reports schema changes as
   findings instead of silently skipping them: `column_dropped` (CRITICAL,
   with every rule referencing the column attached), `column_added`

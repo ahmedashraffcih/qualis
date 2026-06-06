@@ -69,3 +69,70 @@ def test_minimum_yaml_with_only_dataset(tmp_path: Path) -> None:
     assert ctx.dataset == "my_table"
     assert ctx.columns == {}
     assert ctx.business_grain is None
+
+
+def test_fixture_without_provenance_yields_none() -> None:
+    ctx = load_context_from_file(FIXTURE)
+    assert ctx.provenance is None
+
+
+def test_loads_provenance_block(tmp_path: Path) -> None:
+    p = tmp_path / "ctx.yaml"
+    p.write_text(
+        "dataset: predictions\n"
+        "provenance:\n"
+        "  model_id: claude-opus-4-8\n"
+        "  checkpoint: ckpt-2026-05-30\n",
+        encoding="utf-8",
+    )
+    ctx = load_context_from_file(p)
+    assert ctx.provenance is not None
+    assert ctx.provenance.model_id == "claude-opus-4-8"
+    assert ctx.provenance.checkpoint == "ckpt-2026-05-30"
+
+
+def test_provenance_partial_fields_default_to_none(tmp_path: Path) -> None:
+    p = tmp_path / "ctx.yaml"
+    p.write_text(
+        "dataset: predictions\nprovenance:\n  model_id: m1\n",
+        encoding="utf-8",
+    )
+    ctx = load_context_from_file(p)
+    assert ctx.provenance is not None
+    assert ctx.provenance.model_id == "m1"
+    assert ctx.provenance.checkpoint is None
+
+
+def test_provenance_unknown_keys_ignored(tmp_path: Path) -> None:
+    """Loader convention: unknown keys are dropped, never an error."""
+    p = tmp_path / "ctx.yaml"
+    p.write_text(
+        "dataset: predictions\n"
+        "provenance:\n"
+        "  model_id: m1\n"
+        "  temperature: 0.7\n",
+        encoding="utf-8",
+    )
+    ctx = load_context_from_file(p)
+    assert ctx.provenance is not None
+    assert ctx.provenance.model_id == "m1"
+
+
+def test_provenance_values_coerced_to_str(tmp_path: Path) -> None:
+    """A numeric checkpoint (YAML int) must come back as a string."""
+    p = tmp_path / "ctx.yaml"
+    p.write_text(
+        "dataset: predictions\nprovenance:\n  checkpoint: 20260530\n",
+        encoding="utf-8",
+    )
+    ctx = load_context_from_file(p)
+    assert ctx.provenance is not None
+    assert ctx.provenance.checkpoint == "20260530"
+
+
+def test_empty_provenance_block_yields_none(tmp_path: Path) -> None:
+    """`provenance:` with no fields is treated as absent, not an empty shell."""
+    p = tmp_path / "ctx.yaml"
+    p.write_text("dataset: predictions\nprovenance:\n", encoding="utf-8")
+    ctx = load_context_from_file(p)
+    assert ctx.provenance is None
