@@ -246,3 +246,16 @@ class TestReferenceJoin:
             10,
         )
         assert [s["actual_value"] for s in samples] == ["XX"]
+
+
+def test_reference_join_same_column_name_no_tautology(ref_adapter=None) -> None:
+    """Regression: key_column == column must not render 'code' = 'code'."""
+    from qualis.adapters.sqlalchemy.adapter import SQLAlchemyAdapter
+
+    a = SQLAlchemyAdapter("sqlite://")
+    a.execute("CREATE TABLE t (code TEXT)")
+    a.execute("INSERT INTO t VALUES ('XX')")
+    a.execute("CREATE TABLE ref (code TEXT)")
+    a.execute("INSERT INTO ref VALUES ('US')")
+    result = a.check_reference_join("", "t", "code", "", "ref", "code")
+    assert result == {"invalid_count": 1, "total_count": 1}

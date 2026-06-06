@@ -316,17 +316,24 @@ class SQLAlchemyAdapter:
         ``NOT EXISTS`` correlated subquery (capability contract, review
         condition C1). The outer FROM is only the target, so unqualified
         condition columns bind to it (C2)."""
-        c: sa.ColumnClause[Any] = sa.column(column)
-        target = self._target(schema, table)
-        ref_key: sa.ColumnClause[Any] = sa.column(key_column)
-        ref = sa.table(reference, schema=reference_schema or None)
+        # Both sides are explicitly aliased and column-declared so the
+        # correlated comparison is table-QUALIFIED. With bare sa.column()
+        # on both sides, key_column == column (e.g. both "code") rendered
+        # as "code" = "code" — a tautology that zeroed invalid counts.
+        target = sa.table(table, sa.column(column), schema=schema or None).alias("t")
+        ref = sa.table(
+            reference, sa.column(key_column), schema=reference_schema or None
+        ).alias("r")
+        t_col = target.c[column]
         missing = sa.not_(
             sa.exists(
-                sa.select(sa.literal(1)).select_from(ref).where(ref_key == c)
+                sa.select(sa.literal(1))
+                .select_from(ref)
+                .where(ref.c[key_column] == t_col)
             )
         )
         stmt = sa.select(
-            self._sum_case(c.is_not(None) & missing), sa.func.count()
+            self._sum_case(t_col.is_not(None) & missing), sa.func.count()
         ).select_from(target)
         invalid, total = self._counts(self._maybe_where(stmt, condition))
         return {"invalid_count": invalid, "total_count": total}
@@ -384,14 +391,17 @@ class SQLAlchemyAdapter:
         elif kind == "reference_lookup":
             pred = v.is_not(None) & text_v.notin_(list(params["valid_values"]))
         elif kind == "reference_join":
-            ref_key2: sa.ColumnClause[Any] = sa.column(str(params["key_column"]))
+            key2 = str(params["key_column"])
             ref2 = sa.table(
                 str(params["reference"]),
+                sa.column(key2),
                 schema=str(params["reference_schema"]) or None,
-            )
+            ).alias("r")
             pred = v.is_not(None) & sa.not_(
                 sa.exists(
-                    sa.select(sa.literal(1)).select_from(ref2).where(ref_key2 == v)
+                    sa.select(sa.literal(1))
+                    .select_from(ref2)
+                    .where(ref2.c[key2] == v)
                 )
             )
         else:

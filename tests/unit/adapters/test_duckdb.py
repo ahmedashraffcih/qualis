@@ -219,3 +219,14 @@ class TestReferenceJoin:
             10,
         )
         assert [s["actual_value"] for s in samples] == ["XX"]
+
+
+def test_reference_join_same_column_name_no_tautology() -> None:
+    """Parity regression with the sqlalchemy same-name fix."""
+    a = DuckDBAdapter()
+    a._con.execute("CREATE TABLE t (code TEXT)")
+    a._con.execute("INSERT INTO t VALUES ('XX')")
+    a._con.execute("CREATE TABLE ref (code TEXT)")
+    a._con.execute("INSERT INTO ref VALUES ('US')")
+    result = a.check_reference_join("", "t", "code", "", "ref", "code")
+    assert result == {"invalid_count": 1, "total_count": 1}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -136,6 +137,26 @@ def _parse_params(check: str, parameters: dict[str, Any] | None) -> CheckParams:
                 f"under parameters: got {sorted(params.keys()) or 'no parameters'}"
             )
         reference_schema = params.get("reference_schema")
+        if reference_schema is not None:
+            # JOIN mode interpolates these names into SQL as quoted
+            # identifiers — same trust boundary as conditions, so they get
+            # the same load-time shape check (AgDR-0006 condition C4).
+            # In values mode `reference` may be a file path / logical name,
+            # which is why this only applies when reference_schema is set.
+            ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+            for label, value in (
+                ("reference_schema", str(reference_schema)),
+                ("reference", str(params["reference"])),
+                ("key_column", str(params["key_column"])),
+            ):
+                if label == "reference_schema" and value == "":
+                    continue  # empty = the database's default schema
+                if not ident.fullmatch(value):
+                    raise ValueError(
+                        f"reference_lookup JOIN mode: {label} {value!r} is "
+                        f"not a plain identifier (letters, digits, "
+                        f"underscore) — refusing to build SQL from it"
+                    )
         return ReferenceLookupParams(
             reference=str(params["reference"]),
             key_column=str(params["key_column"]),
