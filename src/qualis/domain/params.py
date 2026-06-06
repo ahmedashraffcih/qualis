@@ -58,10 +58,17 @@ class ReferenceLookupParams:
     path, table name, or registered logical name -- adapter-dependent).
     ``key_column`` is the column in the reference whose values the
     rule's target column must match.
+
+    ``reference_schema`` (optional) declares that the reference is a TABLE
+    co-located in the checked database at ``reference_schema.reference``.
+    Setting it opts in to JOIN pushdown; the adapter's ``table_exists``
+    probe must confirm before the JOIN path runs (AgDR-0006 — detected,
+    never assumed). Unset = the classic ReferenceDataPort values path.
     """
 
     reference: str
     key_column: str
+    reference_schema: str | None = None
 
 
 CheckParams = (

@@ -44,7 +44,23 @@ rules:
     check: not_null
 ```
 
-Supported checks: `not_null`, `unique`, `between`, `regex`, `sql`.
+Rules can carry a **`condition`** that scopes the checked population —
+parsed against a small safe grammar at load time, never raw SQL:
+
+```yaml
+  - id: DQ-COMP-002
+    name: "Closed accidents must carry a report date"
+    dimension: completeness
+    severity: warning
+    dataset: accidents
+    column: report_date
+    check: not_null
+    condition: "status = 'closed' AND severity_code != 'PROPERTY'"
+```
+
+Supported checks: `not_null`, `unique`, `between`, `regex`, `in_set`,
+`row_count`, `not_negative`, `reference_lookup` (values or same-database
+JOIN mode), plus `sql` / `custom` stubs.
 
 ---
 
@@ -55,12 +71,47 @@ qualis init [DIRECTORY]          Scaffold rules/ and .gitignore
 qualis validate --rules PATH     Validate YAML syntax, list rules
 qualis check                     Run checks and print a score report
   --rules   PATH                 Rules directory (required)
-  --sample  PATH                 CSV or Parquet file to check (required)
+  --sample  PATH                 CSV or Parquet file to check; omit to run
+                                 against the configured adapter (below)
+  --sample-rows N                Attach up to N real failing rows per
+                                 violated rule as evidence (max 100)
   --fail-on-score N              Exit 1 when score < N (0-100)
   --allow-custom                 Allow custom check type
   --output-format table|json     Output format (default: table)
 qualis version                   Print version
 ```
+
+---
+
+## Databases
+
+Skip `--sample` and qualis runs against a configured database adapter:
+
+```bash
+# Postgres (native adapter, real per-statement timeouts)
+export QUALIS_ADAPTER=postgres
+export QUALIS_DATABASE_URL='postgresql://user:pass@host/db'
+export QUALIS_STATEMENT_TIMEOUT_MS=30000   # one slow table can't hang a run
+
+# ...or ANY engine SQLAlchemy 2.x speaks (MySQL, MSSQL, Oracle, Trino, SQLite)
+pip install 'qualis[sqlalchemy]' your-dbapi-driver
+export QUALIS_ADAPTER=sqlalchemy
+export QUALIS_DATABASE_URL='mysql+pymysql://user:pass@host/db'
+
+qualis check --rules rules/ --sample-rows 5
+```
+
+Built-ins: `duckdb` (default, also powers `--sample`), `in_memory`,
+`postgres`, plus the `sqlalchemy` meta-adapter. Third-party adapters
+(e.g. [`qualis-snowflake`](https://pypi.org/project/qualis-snowflake/),
+[`qualis-bigquery`](https://pypi.org/project/qualis-bigquery/)) plug in
+via the `qualis.adapters` entry-point group. Per-adapter feature honesty
+(timeouts, conditions) is documented in [`docs/adapters.md`](docs/adapters.md).
+
+Reference lookups validate in-database when the reference is a co-located
+table — set `reference_schema` in the rule's parameters and qualis JOINs
+instead of materializing the value set (detected via a `table_exists`
+probe, never assumed).
 
 ---
 

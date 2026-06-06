@@ -302,6 +302,42 @@ class SQLAlchemyAdapter:
         )
         return {"invalid_count": invalid, "total_count": total}
 
+    def check_reference_join(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        reference_schema: str,
+        reference: str,
+        key_column: str,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, int]:
+        """JOIN-mode reference lookup (AgDR-0006) via a NULL-safe
+        ``NOT EXISTS`` correlated subquery (capability contract, review
+        condition C1). The outer FROM is only the target, so unqualified
+        condition columns bind to it (C2)."""
+        # Both sides are explicitly aliased and column-declared so the
+        # correlated comparison is table-QUALIFIED. With bare sa.column()
+        # on both sides, key_column == column (e.g. both "code") rendered
+        # as "code" = "code" — a tautology that zeroed invalid counts.
+        target = sa.table(table, sa.column(column), schema=schema or None).alias("t")
+        ref = sa.table(
+            reference, sa.column(key_column), schema=reference_schema or None
+        ).alias("r")
+        t_col = target.c[column]
+        missing = sa.not_(
+            sa.exists(
+                sa.select(sa.literal(1))
+                .select_from(ref)
+                .where(ref.c[key_column] == t_col)
+            )
+        )
+        stmt = sa.select(
+            self._sum_case(t_col.is_not(None) & missing), sa.func.count()
+        ).select_from(target)
+        invalid, total = self._counts(self._maybe_where(stmt, condition))
+        return {"invalid_count": invalid, "total_count": total}
+
     # ------------------------------------------------------------------
     # Optional sampling capability (AgDR-0003)
     # ------------------------------------------------------------------
@@ -354,6 +390,20 @@ class SQLAlchemyAdapter:
             pred = v.is_not(None) & (v < 0)
         elif kind == "reference_lookup":
             pred = v.is_not(None) & text_v.notin_(list(params["valid_values"]))
+        elif kind == "reference_join":
+            key2 = str(params["key_column"])
+            ref2 = sa.table(
+                str(params["reference"]),
+                sa.column(key2),
+                schema=str(params["reference_schema"]) or None,
+            ).alias("r")
+            pred = v.is_not(None) & sa.not_(
+                sa.exists(
+                    sa.select(sa.literal(1))
+                    .select_from(ref2)
+                    .where(ref2.c[key2] == v)
+                )
+            )
         else:
             raise ValueError(f"unsupported sample kind: {kind!r}")
 

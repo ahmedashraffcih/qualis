@@ -40,6 +40,25 @@ by construction. Dialect notes:
 - **duplicate_count** = non-null values − distinct non-null values
   ("extra copies").
 
+## Reference JOIN mode
+
+`reference_lookup` rules whose reference data is a **table in the checked
+database** can set `reference_schema` in their parameters: qualis probes
+`table_exists(reference_schema, reference)` and, when confirmed, validates
+membership with a NULL-safe `NOT EXISTS` correlated subquery — zero Python
+materialization of the value set. Probe failure or a missing
+`check_reference_join` capability skips loudly (detected, never assumed —
+AgDR-0006). The `NOT EXISTS` form is a capability contract: `NOT IN
+(subquery)` silently zeroes counts when the reference key contains NULLs.
+Adapters without `check_reference_lookup` at all now skip with a reason
+(the old full-column Python fallback is removed).
+
+| Adapter | JOIN mode |
+| --- | --- |
+| duckdb / postgres / sqlalchemy | **Supported** |
+| in_memory | N/A — its reference data IS the port; values path |
+| qualis-snowflake / qualis-bigquery | Not yet (values path works as before) |
+
 ## Timeout-honesty matrix
 
 `QUALIS_STATEMENT_TIMEOUT_MS` protects runs from one slow table — but only

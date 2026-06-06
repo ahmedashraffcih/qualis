@@ -327,3 +327,41 @@ def _parse_rule_helper(extra: dict[str, object], rule_id: str = "r-1"):
     }
     data.update(extra)
     return _parse_rule(data)
+
+
+class TestReferenceJoinIdentifierValidation:
+    """AgDR-0006 C4: JOIN-mode names must be plain identifiers at load."""
+
+    def test_hostile_key_column_rejected(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="key_column"):
+            _parse_rule_helper({
+                "check": "reference_lookup",
+                "parameters": {
+                    "reference": "countries",
+                    "key_column": 'x" = "x" OR 1=1 --',
+                    "reference_schema": "refs",
+                },
+            })
+
+    def test_values_mode_reference_may_be_a_path(self) -> None:
+        rule = _parse_rule_helper({
+            "check": "reference_lookup",
+            "parameters": {
+                "reference": "data/country_codes.csv",
+                "key_column": "code",
+            },
+        })
+        assert rule.params.reference == "data/country_codes.csv"
+
+    def test_empty_reference_schema_means_default_schema(self) -> None:
+        rule = _parse_rule_helper({
+            "check": "reference_lookup",
+            "parameters": {
+                "reference": "countries",
+                "key_column": "code",
+                "reference_schema": "",
+            },
+        })
+        assert rule.params.reference_schema == ""

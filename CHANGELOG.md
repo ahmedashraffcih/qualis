@@ -3,6 +3,20 @@
 ## v0.5.0 (unreleased) — Production hardening
 
 ### Added
+- **Reference JOIN pushdown with detected co-location** — set
+  `reference_schema` on a `reference_lookup` rule and qualis validates
+  membership in-database via a NULL-safe `NOT EXISTS` subquery instead
+  of materializing the reference values in Python. Co-location is
+  verified with a `table_exists` probe; probe failure skips loudly.
+  Implemented for duckdb, postgres, and the sqlalchemy meta-adapter;
+  composes with rule conditions and `--sample-rows` evidence. See
+  AgDR-0006. (#14)
+
+### Removed
+- **The reference_lookup full-column Python fallback.** Adapters without
+  the `check_reference_lookup` capability now skip the rule with a
+  visible reason instead of pulling every target value into Python for a
+  set diff (unbounded memory; no shipped adapter used the path). (#14)
 - **`Rule.condition` now actually filters the checked population** —
   previously loaded from YAML and silently ignored at execution (and
   dropped on re-serialization). Conditions are parsed against a small

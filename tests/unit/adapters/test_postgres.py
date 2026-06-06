@@ -388,3 +388,37 @@ class TestConditions:
         assert 'AND ("region" = %(cond_0)s)' in sql
         assert bind["cond_0"] == "EU"
         assert bind["limit"] == 5
+
+
+class TestReferenceJoin:
+    """AgDR-0006: SQL shape — NULL-safe NOT EXISTS + binds (mock-based)."""
+
+    def test_join_sql_uses_not_exists_and_binds(self) -> None:
+        from unittest.mock import MagicMock
+
+        from qualis.adapters.postgres.adapter import PostgresAdapter
+        from qualis.domain.condition import parse_condition
+
+        mock_pool = MagicMock()
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchone.return_value = (1, 2)
+        mock_pool.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+        mock_pool.connection.return_value.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        adapter = PostgresAdapter.__new__(PostgresAdapter)
+        adapter._pool = mock_pool  # type: ignore[attr-defined]
+        adapter._statement_timeout_ms = None  # type: ignore[attr-defined]
+
+        result = adapter.check_reference_join(
+            "public", "orders", "country", "refs", "countries", "code",
+            condition=parse_condition("region = 'emea'"),
+        )
+        sql, bind = mock_cur.execute.call_args.args
+        assert "NOT EXISTS" in sql
+        assert "NOT IN" not in sql  # C1: the NULL-trap form is forbidden
+        assert 'r."code" = t."country"' in sql
+        assert '"region" = %(cond_0)s' in sql
+        assert bind["cond_0"] == "emea"
+        assert result == {"invalid_count": 1, "total_count": 2}
