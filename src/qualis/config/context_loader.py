@@ -10,6 +10,7 @@ import yaml
 from qualis.domain.context import (
     ColumnContext,
     DatasetContext,
+    ProvenanceContext,
     SentinelDeclaration,
 )
 
@@ -21,6 +22,9 @@ def load_context_from_file(path: Path) -> DatasetContext:
 
         dataset: <name>
         business_grain: <free text, optional>
+        provenance:            # optional — for machine-generated datasets
+          model_id: <str>      # e.g. the LLM that produced the table
+          checkpoint: <str>    # the model checkpoint / version tag
         columns:
           <column_name>:
             sentinels:
@@ -53,6 +57,27 @@ def load_context_from_file(path: Path) -> DatasetContext:
         dataset=str(raw["dataset"]),
         business_grain=raw.get("business_grain"),
         columns=columns,
+        provenance=_parse_provenance(raw.get("provenance")),
+    )
+
+
+def _parse_provenance(raw: Any) -> ProvenanceContext | None:
+    """Parse the optional ``provenance:`` block.
+
+    Absent, empty, or non-mapping blocks yield ``None`` — an empty shell
+    would make ``ctx.provenance is None`` checks lie. Unknown keys are
+    ignored, matching the loader's convention everywhere else. Values are
+    coerced to ``str`` (a numeric checkpoint tag must round-trip as text).
+    """
+    if not isinstance(raw, dict):
+        return None
+    model_id = raw.get("model_id")
+    checkpoint = raw.get("checkpoint")
+    if model_id is None and checkpoint is None:
+        return None
+    return ProvenanceContext(
+        model_id=None if model_id is None else str(model_id),
+        checkpoint=None if checkpoint is None else str(checkpoint),
     )
 
 

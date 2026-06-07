@@ -46,17 +46,38 @@ class ColumnContext:
 
 
 @dataclass(frozen=True)
+class ProvenanceContext:
+    """Which process produced this dataset — descriptive-only in v1.
+
+    For LLM-generated or model-scored datasets, recording the producing
+    model and checkpoint lets a human correlate drift findings with a
+    checkpoint change ("the null spike started when ckpt-B replaced
+    ckpt-A"). Nothing in the engine consumes these fields; no SQL is
+    ever built from them. A future correlation feature MUST validate
+    these as identifiers before they touch SQL (see qualis#19).
+    """
+
+    model_id: str | None = None
+    checkpoint: str | None = None
+
+
+@dataclass(frozen=True)
 class DatasetContext:
     """Dataset-level context: per-column annotations + business grain.
 
     business_grain -- the join key the business actually counts at
     (free-text; suggester does not consume this in v0.3.0, but the
     review screen surfaces it so reviewers can spot wrong-key joins).
+
+    provenance -- which model/checkpoint produced the dataset, when it
+    is machine-generated. Namespaced under its own block so future
+    provenance fields never collide with dataset-level keys.
     """
 
     dataset: str
     columns: dict[str, ColumnContext] = field(default_factory=dict)
     business_grain: str | None = None
+    provenance: ProvenanceContext | None = None
 
     def get_column(self, column: str) -> ColumnContext:
         """Return the ColumnContext for *column*, or an empty one if absent.
