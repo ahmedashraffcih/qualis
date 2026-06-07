@@ -230,3 +230,40 @@ def test_reference_join_same_column_name_no_tautology() -> None:
     a._con.execute("INSERT INTO ref VALUES ('US')")
     result = a.check_reference_join("", "t", "code", "", "ref", "code")
     assert result == {"invalid_count": 1, "total_count": 1}
+
+
+class TestCheckAggregate:
+    """cross_dataset_assertion capability (AgDR-0008)."""
+
+    def _adp(self) -> DuckDBAdapter:
+        a = DuckDBAdapter()
+        a._con.execute(
+            "CREATE TABLE t (amount DOUBLE); "
+            "INSERT INTO t VALUES (1.5), (2.5), (NULL)"
+        )
+        a._con.execute("CREATE TABLE empty_t (amount DOUBLE)")
+        return a
+
+    def test_row_count(self) -> None:
+        a = self._adp()
+        assert a.check_aggregate("", "t", "row_count")["value"] == 3
+
+    def test_sum_excludes_nulls(self) -> None:
+        a = self._adp()
+        assert float(a.check_aggregate("", "t", "sum", "amount")["value"]) == 4.0
+
+    def test_sum_of_empty_table_is_zero_not_null(self) -> None:
+        a = self._adp()
+        value = a.check_aggregate("", "empty_t", "sum", "amount")["value"]
+        assert value is not None
+        assert float(value) == 0.0
+
+    def test_unknown_metric_rejected(self) -> None:
+        a = self._adp()
+        with pytest.raises(ValueError, match="unsupported metric"):
+            a.check_aggregate("", "t", "count_distinct", "amount")
+
+    def test_sum_without_column_rejected(self) -> None:
+        a = self._adp()
+        with pytest.raises(ValueError, match="column"):
+            a.check_aggregate("", "t", "sum")

@@ -269,6 +269,35 @@ class SQLAlchemyAdapter:
         (count,) = self._counts(self._maybe_where(stmt, condition))
         return {"row_count": count}
 
+    def check_aggregate(
+        self,
+        schema: str,
+        table: str,
+        metric: str,
+        column: str | None = None,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate capability for cross_dataset_assertion (AgDR-0008).
+
+        Fixed metric→expression map (the metric name never reaches SQL
+        text); COALESCE keeps an empty/all-NULL SUM at 0. The raw scalar
+        is returned untouched — the engine handles Decimal conversion
+        and the NaN/Infinity guard.
+        """
+        if metric == "row_count":
+            expr: Any = sa.func.count()
+        elif metric == "sum":
+            if not column:
+                raise ValueError("check_aggregate: metric 'sum' requires a column")
+            expr = sa.func.coalesce(sa.func.sum(sa.column(column)), 0)
+        else:
+            raise ValueError(f"check_aggregate: unsupported metric {metric!r}")
+        stmt = sa.select(expr).select_from(self._target(schema, table))
+        stmt = self._maybe_where(stmt, condition)
+        with self._engine.connect() as conn:
+            value = conn.execute(stmt).scalar_one()
+        return {"value": value}
+
     def check_not_negative(
         self,
         schema: str,

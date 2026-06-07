@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import math
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from qualis.domain.condition import (
@@ -17,6 +19,7 @@ from qualis.domain.models import (
 )
 from qualis.domain.params import (
     BetweenParams,
+    CrossDatasetParams,
     InSetParams,
     ReferenceLookupParams,
     RegexParams,
@@ -87,6 +90,8 @@ class RuleEngine:
             return self._check_not_negative(rule, condition)
         if rule.check == CheckType.REFERENCE_LOOKUP:
             return self._check_reference_lookup(rule, condition)
+        if rule.check == CheckType.CROSS_DATASET_ASSERTION:
+            return self._check_cross_dataset(rule, condition)
         if rule.check in (CheckType.SQL, CheckType.CUSTOM):
             return self._check_stub(rule)
         # Fallback for unknown check types — return a passing stub
@@ -395,6 +400,130 @@ class RuleEngine:
             violation_count=1 if failed else 0,
             violations=violations,
             rows_checked=count,
+        )
+
+    @staticmethod
+    def _finite_decimal(value: Any) -> Decimal | None:
+        """Convert an adapter aggregate to a finite Decimal, or None.
+
+        ``None`` signals "not comparable" — NaN/Infinity from a float-column
+        SUM, or a value Decimal cannot parse. The caller fails the check
+        explicitly rather than comparing garbage (AgDR-0008).
+        """
+        if value is None:
+            return None
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        try:
+            d = Decimal(str(value))
+        except InvalidOperation:
+            return None
+        if d.is_nan() or d.is_infinite():
+            return None
+        return d
+
+    def _check_cross_dataset(
+        self, rule: Rule, condition: ConditionExpr | None = None
+    ) -> CheckResult:
+        """Compare one aggregate between the rule's dataset and a reference.
+
+        Table-level check (``violation_count`` ∈ {0,1}, row_count
+        precedent). Two independent adapter calls — each leg is bounded by
+        the per-statement timeout separately; the pair is not a consistent
+        snapshot (documented in AgDR-0008). The rule's ``condition``
+        applies to the TARGET leg only.
+        """
+        params = rule.params
+        if not isinstance(params, CrossDatasetParams):
+            return self._check_stub(rule)
+        if not hasattr(self._adapter, "check_aggregate"):
+            return self._skipped(
+                rule,
+                f"adapter {type(self._adapter).__name__} does not "
+                f"implement cross_dataset_assertion",
+            )
+
+        schema, table = self._dataset_parts(rule)
+        if "." in params.reference_dataset:
+            ref_schema, ref_table = params.reference_dataset.split(".", 1)
+        else:
+            ref_schema, ref_table = self._schema, params.reference_dataset
+
+        column = rule.column
+        ref_column = params.reference_column or column
+
+        if (schema, table, column) == (ref_schema, ref_table, ref_column):
+            logger.warning(
+                "rule %s compares a dataset to itself (%s.%s) — the "
+                "assertion is trivially true; check reference_dataset",
+                rule.id,
+                schema,
+                table,
+            )
+
+        # Detected, never guessed (AgDR-0006 precedent): probe the
+        # reference before querying it, so a typo'd reference_dataset is a
+        # located skip instead of a mid-run traceback.
+        if hasattr(self._adapter, "table_exists") and not self._adapter.table_exists(
+            ref_schema, ref_table
+        ):
+            return self._skipped(
+                rule,
+                f"reference dataset {ref_schema}.{ref_table} not found "
+                f"in the checked database",
+            )
+
+        target_raw = self._adapter.check_aggregate(
+            schema, table, params.metric, column, **self._cond_kwargs(condition)
+        ).get("value")
+        ref_raw = self._adapter.check_aggregate(
+            ref_schema, ref_table, params.metric, ref_column
+        ).get("value")
+
+        target = self._finite_decimal(target_raw)
+        ref = self._finite_decimal(ref_raw)
+        expected_base = (
+            f"{params.metric} within {params.tolerance_pct}% of "
+            f"{ref_schema}.{ref_table}"
+        )
+
+        if target is None or ref is None:
+            return CheckResult(
+                rule=rule,
+                passed=False,
+                violation_count=1,
+                violations=self._sample(
+                    rule,
+                    expected=f"finite aggregate for {expected_base}",
+                    actual_value=f"target={target_raw!r} reference={ref_raw!r}",
+                ),
+                rows_checked=0,
+            )
+
+        # Zero-baseline convention (drift._relative_change): never divide.
+        if ref == 0:
+            failed = target != 0
+            note = " (baseline was zero)" if failed else ""
+        else:
+            tolerance = Decimal(params.tolerance_pct) / Decimal(100)
+            failed = abs(target - ref) / abs(ref) > tolerance
+            note = ""
+
+        violations = (
+            self._sample(
+                rule,
+                expected=expected_base + note,
+                actual_value=f"target={target} reference={ref}",
+            )
+            if failed
+            else []
+        )
+        return CheckResult(
+            rule=rule,
+            passed=not failed,
+            violation_count=1 if failed else 0,
+            violations=violations,
+            rows_checked=0,
         )
 
     def _check_not_negative(

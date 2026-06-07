@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Added
+- **`cross_dataset_assertion` check kind** — compare an aggregate
+  (`row_count` or `sum`) between the rule's dataset and a reference
+  dataset within a Decimal tolerance, e.g. "fact row count within 2%
+  of staging". Catches transformations that silently dropped rows.
+  New optional adapter capability `check_aggregate` (duckdb, postgres,
+  sqlalchemy, in_memory); reference probed via `table_exists` before
+  querying; zero-baseline convention (never divides by zero); NaN/Inf
+  aggregates fail explicitly; all identifiers + the metric whitelist
+  validated at load time. `count_distinct` deliberately deferred. Each
+  leg runs in its own statement-timeout-bounded query. See AgDR-0008. (#21)
 - **Notifications** — `qualis check --notify` sends a bounded score
   summary to Slack (`QUALIS_SLACK_WEBHOOK_URL`) and/or a generic JSON
   webhook (`QUALIS_WEBHOOK_URL`). First `NotifierPort` implementations;

@@ -15,6 +15,8 @@ except ImportError:  # pragma: no cover
 
 from qualis.adapters._condition_sql import render_sql_condition
 from qualis.adapters.postgres.sql_templates import (
+    AGGREGATE_ROW_COUNT_SQL,
+    AGGREGATE_SUM_SQL,
     BETWEEN_SQL,
     IN_SET_SQL,
     NOT_NEGATIVE_SQL,
@@ -294,6 +296,40 @@ class PostgresAdapter:
                 row = cur.fetchone()
         count = int(row[0]) if row else 0
         return {"row_count": count}
+
+    def check_aggregate(
+        self,
+        schema: str,
+        table: str,
+        metric: str,
+        column: str | None = None,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate capability for cross_dataset_assertion (AgDR-0008).
+
+        Fixed metric→template map — the metric name is never formatted
+        into SQL. ``::numeric`` returns Decimal for ``sum`` so the
+        engine's tolerance comparison keeps exact precision. Runs in its
+        own transaction; the per-statement timeout bounds this leg alone.
+        """
+        if metric == "row_count":
+            sql = AGGREGATE_ROW_COUNT_SQL.format(table=_qualified(schema, table))
+        elif metric == "sum":
+            if not column:
+                raise ValueError("check_aggregate: metric 'sum' requires a column")
+            sql = AGGREGATE_SUM_SQL.format(
+                table=_qualified(schema, table), column=column
+            )
+        else:
+            raise ValueError(f"check_aggregate: unsupported metric {metric!r}")
+        where, binds = self._where(condition)
+        sql = sql.rstrip() + where
+        with self._pool.connection() as conn:
+            self._begin_read_only(conn)
+            with conn.cursor() as cur:
+                cur.execute(sql, binds)
+                row = cur.fetchone()
+        return {"value": row[0] if row else None}
 
     def check_not_negative(
         self,

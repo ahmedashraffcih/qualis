@@ -53,6 +53,11 @@ IN_SET_SQL = (
 
 ROW_COUNT_SQL = "SELECT COUNT(*) AS row_count FROM {table}"
 
+# cross_dataset_assertion aggregates (AgDR-0008). COALESCE keeps an
+# empty/all-NULL SUM at 0 — a NULL would silently pass any comparison.
+AGGREGATE_ROW_COUNT_SQL = "SELECT COUNT(*) AS value FROM {table}"
+AGGREGATE_SUM_SQL = 'SELECT COALESCE(SUM("{column}"), 0) AS value FROM {table}'
+
 NOT_NEGATIVE_SQL = (
     "SELECT "
     '  COUNT(*) FILTER (WHERE "{column}" IS NOT NULL AND "{column}" < 0) '

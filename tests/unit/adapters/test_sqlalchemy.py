@@ -259,3 +259,26 @@ def test_reference_join_same_column_name_no_tautology(ref_adapter=None) -> None:
     a.execute("INSERT INTO ref VALUES ('US')")
     result = a.check_reference_join("", "t", "code", "", "ref", "code")
     assert result == {"invalid_count": 1, "total_count": 1}
+
+
+class TestCheckAggregate:
+    """cross_dataset_assertion capability (AgDR-0008) via Core expressions."""
+
+    def test_row_count(self, adapter) -> None:  # type: ignore[no-untyped-def]
+        assert adapter.check_aggregate("", "accidents", "row_count")["value"] == 6
+
+    def test_sum_excludes_nulls(self, adapter) -> None:  # type: ignore[no-untyped-def]
+        # location_id: 101+102+103+(-5)+106 = 407, one NULL excluded
+        value = adapter.check_aggregate("", "accidents", "sum", "location_id")["value"]
+        assert float(value) == 407.0
+
+    def test_sum_of_all_null_is_zero(self, adapter) -> None:  # type: ignore[no-untyped-def]
+        adapter.execute("CREATE TABLE nulls_only (x INTEGER)")
+        adapter.execute("INSERT INTO nulls_only VALUES (NULL)")
+        value = adapter.check_aggregate("", "nulls_only", "sum", "x")["value"]
+        assert value is not None
+        assert float(value) == 0.0
+
+    def test_unknown_metric_rejected(self, adapter) -> None:  # type: ignore[no-untyped-def]
+        with pytest.raises(ValueError, match="unsupported metric"):
+            adapter.check_aggregate("", "accidents", "count_distinct", "id")
