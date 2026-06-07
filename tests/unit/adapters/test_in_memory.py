@@ -224,3 +224,39 @@ class TestCheckNotNegative:
 
 def adapter_query_all(a: InMemoryAdapter, schema: str, table: str) -> list[dict[str, Any]]:
     return a.query(f"SELECT * FROM {schema}.{table}")
+
+
+class TestCheckAggregate:
+    """cross_dataset_assertion capability (AgDR-0008)."""
+
+    def _adp(self):  # type: ignore[no-untyped-def]
+        from qualis.adapters.in_memory.adapter import InMemoryAdapter
+
+        a = InMemoryAdapter()
+        a.add_table(
+            "s", "t",
+            [{"amount": "1.5"}, {"amount": "2.5"}, {"amount": None}],
+        )
+        a.add_table("s", "empty_t", [])
+        return a
+
+    def test_row_count(self) -> None:
+        assert self._adp().check_aggregate("s", "t", "row_count")["value"] == 3
+
+    def test_sum_excludes_nulls(self) -> None:
+        from decimal import Decimal
+
+        value = self._adp().check_aggregate("s", "t", "sum", "amount")["value"]
+        assert value == Decimal("4.0")
+
+    def test_sum_of_empty_table_is_zero(self) -> None:
+        from decimal import Decimal
+
+        value = self._adp().check_aggregate("s", "empty_t", "sum", "amount")["value"]
+        assert value == Decimal(0)
+
+    def test_unknown_metric_rejected(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="unsupported metric"):
+            self._adp().check_aggregate("s", "t", "count_distinct")

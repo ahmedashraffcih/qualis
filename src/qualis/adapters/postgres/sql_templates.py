@@ -60,6 +60,17 @@ ROW_COUNT_SQL = """
 SELECT COUNT(*) AS row_count FROM {table}
 """
 
+# cross_dataset_assertion aggregates (AgDR-0008). COALESCE keeps an
+# empty/all-NULL SUM at 0; ::numeric returns Decimal so the engine's
+# tolerance comparison never loses precision to a float cast.
+AGGREGATE_ROW_COUNT_SQL = """
+SELECT COUNT(*) AS value FROM {table}
+"""
+
+AGGREGATE_SUM_SQL = """
+SELECT COALESCE(SUM("{column}"), 0)::numeric AS value FROM {table}
+"""
+
 NOT_NEGATIVE_SQL = """
 SELECT
     COUNT(*) FILTER (WHERE "{column}" IS NOT NULL AND "{column}" < 0)

@@ -114,8 +114,8 @@ class TestCheckType:
     def test_has_not_negative(self) -> None:
         assert CheckType.NOT_NEGATIVE.value == "not_negative"
 
-    def test_has_exactly_ten_members(self) -> None:
-        assert len(CheckType) == 10
+    def test_has_exactly_eleven_members(self) -> None:
+        assert len(CheckType) == 11
 
     def test_is_string_enum(self) -> None:
         assert isinstance(CheckType.NOT_NULL, str)
@@ -124,6 +124,7 @@ class TestCheckType:
         expected = {
             "not_null", "unique", "between", "regex", "sql", "custom",
             "in_set", "row_count", "not_negative", "reference_lookup",
+            "cross_dataset_assertion",
         }
         actual = {ct.value for ct in CheckType}
         assert actual == expected

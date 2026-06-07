@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from qualis.domain.condition import evaluate_condition
@@ -62,6 +63,36 @@ class InMemoryAdapter:
 
     def table_exists(self, schema: str, table: str) -> bool:
         return f"{schema}.{table}" in self._tables
+
+    def check_aggregate(
+        self,
+        schema: str,
+        table: str,
+        metric: str,
+        column: str | None = None,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate capability for cross_dataset_assertion (AgDR-0008).
+
+        NULL values are excluded from ``sum`` (SQL semantics) and the
+        empty/all-NULL sum is 0, mirroring the COALESCE contract the SQL
+        adapters implement.
+        """
+        rows = self._population(schema, table, condition)
+        if metric == "row_count":
+            return {"value": len(rows)}
+        if metric == "sum":
+            if not column:
+                raise ValueError("check_aggregate: metric 'sum' requires a column")
+            total = Decimal(0)
+            for r in rows:
+                v = r.get(column)
+                if v is None:
+                    continue
+                total += Decimal(str(v))
+            return {"value": total}
+        # Defence in depth — the loader whitelist is the real gate.
+        raise ValueError(f"check_aggregate: unsupported metric {metric!r}")
 
     def check_not_null(
         self,

@@ -4,6 +4,7 @@ import difflib
 import os
 import re
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -17,6 +18,7 @@ from qualis.domain.models import Rule
 from qualis.domain.params import (
     BetweenParams,
     CheckParams,
+    CrossDatasetParams,
     CustomParams,
     InSetParams,
     NotNegativeParams,
@@ -164,8 +166,89 @@ def _parse_params(check: str, parameters: dict[str, Any] | None) -> CheckParams:
                 str(reference_schema) if reference_schema is not None else None
             ),
         )
+    if check == CheckType.CROSS_DATASET_ASSERTION:
+        return _parse_cross_dataset_params(params)
     # Unreachable — check has already been validated against CheckType values
     raise ValueError(f"Unhandled check type: {check}")  # pragma: no cover
+
+
+# v1 metric whitelist (AgDR-0008). count_distinct is DEFERRED on purpose —
+# its hash aggregate spills to disk at high cardinality and blows statement
+# timeouts on large tables; it returns behind an explicit opt-in later.
+_CROSS_DATASET_METRICS = frozenset({"row_count", "sum"})
+
+
+def _parse_cross_dataset_params(params: dict[str, Any]) -> CrossDatasetParams:
+    """Load-time trust boundary for cross_dataset_assertion (AgDR-0008).
+
+    Every name here reaches SQL as a quoted identifier — same shape check
+    as conditions (AgDR-0005) and reference_lookup JOIN mode (AgDR-0006).
+    """
+    if "metric" not in params or "reference_dataset" not in params:
+        raise ValueError(
+            "check 'cross_dataset_assertion' requires both 'metric' and "
+            "'reference_dataset' under parameters: "
+            f"got {sorted(params.keys()) or 'no parameters'}"
+        )
+    metric = str(params["metric"])
+    if metric not in _CROSS_DATASET_METRICS:
+        deferred = (
+            " ('count_distinct' is deferred — see AgDR-0008)"
+            if metric == "count_distinct"
+            else ""
+        )
+        raise ValueError(
+            f"cross_dataset_assertion: metric {metric!r} is not supported; "
+            f"allowed: {sorted(_CROSS_DATASET_METRICS)}{deferred}"
+        )
+
+    ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+    reference_dataset = str(params["reference_dataset"])
+    parts = reference_dataset.split(".")
+    if len(parts) > 2:
+        raise ValueError(
+            f"cross_dataset_assertion: reference_dataset "
+            f"{reference_dataset!r} has too many parts — expected "
+            f"'table' or 'schema.table' identifiers"
+        )
+    for part in parts:
+        if not ident.fullmatch(part):
+            raise ValueError(
+                f"cross_dataset_assertion: reference_dataset part {part!r} "
+                f"is not a plain identifier (letters, digits, underscore) "
+                f"— refusing to build SQL from it"
+            )
+
+    reference_column = params.get("reference_column")
+    if reference_column is not None and not ident.fullmatch(str(reference_column)):
+        raise ValueError(
+            f"cross_dataset_assertion: reference_column "
+            f"{str(reference_column)!r} is not a plain identifier — "
+            f"refusing to build SQL from it"
+        )
+
+    tolerance_pct = str(params.get("tolerance_pct", "0"))
+    try:
+        tolerance = Decimal(tolerance_pct)
+    except InvalidOperation as exc:
+        raise ValueError(
+            f"cross_dataset_assertion: tolerance_pct {tolerance_pct!r} is "
+            f"not a number"
+        ) from exc
+    if tolerance.is_nan() or tolerance < 0:
+        raise ValueError(
+            f"cross_dataset_assertion: tolerance_pct {tolerance_pct!r} "
+            f"must be a non-negative number"
+        )
+
+    return CrossDatasetParams(
+        metric=metric,
+        reference_dataset=reference_dataset,
+        reference_column=(
+            str(reference_column) if reference_column is not None else None
+        ),
+        tolerance_pct=tolerance_pct,
+    )
 
 
 def _validated_condition(data: dict[str, Any]) -> str | None:
@@ -215,6 +298,19 @@ def _parse_rule(data: dict[str, Any]) -> Rule:
     )
 
     params = _parse_params(check_str, data.get("parameters"))
+
+    # Cross-rule validation: sum aggregates need a target column, and the
+    # params parser can't see the rule-level `column` field.
+    if (
+        isinstance(params, CrossDatasetParams)
+        and params.metric == "sum"
+        and not column
+    ):
+        raise ValueError(
+            f"rule {data.get('id', '<no id>')!r}: cross_dataset_assertion "
+            f"with metric 'sum' requires a rule-level 'column' (the target "
+            f"column to sum)"
+        )
 
     status_str = str(data.get("status", RuleStatus.ACTIVE.value))
     status = RuleStatus(status_str)

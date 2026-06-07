@@ -58,9 +58,26 @@ parsed against a small safe grammar at load time, never raw SQL:
     condition: "status = 'closed' AND severity_code != 'PROPERTY'"
 ```
 
+Cross-dataset assertions compare an aggregate between two tables in the
+same database — the check that catches a transformation (increasingly
+AI-written) that silently dropped rows:
+
+```yaml
+  - id: DQ-CONS-001
+    name: "Fact row count tracks staging within 2%"
+    dimension: consistency
+    severity: critical
+    dataset: marts.orders
+    check: cross_dataset_assertion
+    parameters:
+      metric: row_count            # v1: row_count | sum
+      reference_dataset: staging.orders
+      tolerance_pct: "2"
+```
+
 Supported checks: `not_null`, `unique`, `between`, `regex`, `in_set`,
 `row_count`, `not_negative`, `reference_lookup` (values or same-database
-JOIN mode), plus `sql` / `custom` stubs.
+JOIN mode), `cross_dataset_assertion`, plus `sql` / `custom` stubs.
 
 ---
 

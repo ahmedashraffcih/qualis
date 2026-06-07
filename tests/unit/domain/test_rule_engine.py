@@ -635,3 +635,210 @@ class TestReferenceJoinPushdown:
         result = engine.evaluate_rule(self._join_rule(reference_schema=None))
         assert result.skipped
         assert "reference_lookup" in result.skip_reason
+
+
+# ---------------------------------------------------------------------------
+# cross_dataset_assertion (qualis#21, AgDR-0008)
+# ---------------------------------------------------------------------------
+
+from decimal import Decimal  # noqa: E402
+
+from qualis.domain.params import CrossDatasetParams  # noqa: E402
+
+
+class _AggAdapter:
+    """Fake adapter exposing the check_aggregate capability."""
+
+    def __init__(
+        self,
+        values: dict[tuple[str, str], object],
+        exists: bool = True,
+    ) -> None:
+        self._values = values
+        self._exists = exists
+        self.calls: list[tuple[str, str, str, str | None, object]] = []
+
+    def table_exists(self, schema: str, table: str) -> bool:
+        return self._exists
+
+    def check_aggregate(
+        self,
+        schema: str,
+        table: str,
+        metric: str,
+        column: str | None = None,
+        condition: object = None,
+    ) -> dict[str, object]:
+        self.calls.append((schema, table, metric, column, condition))
+        return {"value": self._values[(schema, table)]}
+
+
+def _xds_rule(
+    *,
+    metric: str = "row_count",
+    reference_dataset: str = "staging.records",
+    reference_column: str | None = None,
+    tolerance_pct: str = "2",
+    column: str | None = None,
+) -> Rule:
+    return _make_rule(
+        rule_id="xds-001",
+        check="cross_dataset_assertion",
+        column=column,
+        params=CrossDatasetParams(
+            metric=metric,
+            reference_dataset=reference_dataset,
+            reference_column=reference_column,
+            tolerance_pct=tolerance_pct,
+        ),
+    )
+
+
+class TestCrossDatasetAssertion:
+    def test_within_tolerance_passes(self) -> None:
+        db = _AggAdapter({(SCHEMA, TABLE): 100, ("staging", "records"): 99})
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(_xds_rule())
+        assert result.passed
+        assert result.violation_count == 0
+        assert result.violations == []
+
+    def test_outside_tolerance_fails_table_level(self) -> None:
+        db = _AggAdapter({(SCHEMA, TABLE): 90, ("staging", "records"): 100})
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(_xds_rule())
+        assert not result.passed
+        assert result.violation_count == 1  # table-level convention
+        assert len(result.violations) == 1
+
+    def test_boundary_exactly_at_tolerance_passes(self) -> None:
+        db = _AggAdapter({(SCHEMA, TABLE): 98, ("staging", "records"): 100})
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(
+            _xds_rule(tolerance_pct="2")
+        )
+        assert result.passed
+
+    def test_zero_baseline_both_zero_passes(self) -> None:
+        db = _AggAdapter({(SCHEMA, TABLE): 0, ("staging", "records"): 0})
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(_xds_rule())
+        assert result.passed
+
+    def test_zero_baseline_nonzero_target_fails_without_division(self) -> None:
+        db = _AggAdapter({(SCHEMA, TABLE): 5, ("staging", "records"): 0})
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(_xds_rule())
+        assert not result.passed
+        assert "baseline was zero" in result.violations[0].expected
+
+    def test_missing_reference_table_skips_loudly(self) -> None:
+        db = _AggAdapter({(SCHEMA, TABLE): 100}, exists=False)
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(_xds_rule())
+        assert result.skipped
+        assert "staging.records" in result.skip_reason
+        assert db.calls == []  # never queried a missing table
+
+    def test_adapter_without_capability_skips(self) -> None:
+        class _NoCap:
+            pass
+
+        result = RuleEngine(_NoCap(), schema=SCHEMA).evaluate_rule(_xds_rule())
+        assert result.skipped
+        assert "does not implement" in result.skip_reason
+
+    def test_non_finite_aggregate_fails_explicitly(self) -> None:
+        db = _AggAdapter(
+            {(SCHEMA, TABLE): float("nan"), ("staging", "records"): 100}
+        )
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(
+            _xds_rule(metric="sum", column="value")
+        )
+        assert not result.passed
+        assert "finite" in result.violations[0].expected
+
+    def test_sum_uses_rule_column_and_reference_column_default(self) -> None:
+        db = _AggAdapter({(SCHEMA, TABLE): 50, ("staging", "records"): 50})
+        RuleEngine(db, schema=SCHEMA).evaluate_rule(
+            _xds_rule(metric="sum", column="amount")
+        )
+        target_call, ref_call = db.calls
+        assert target_call[2:4] == ("sum", "amount")
+        assert ref_call[2:4] == ("sum", "amount")  # defaults to rule column
+
+    def test_reference_column_override(self) -> None:
+        db = _AggAdapter({(SCHEMA, TABLE): 50, ("staging", "records"): 50})
+        RuleEngine(db, schema=SCHEMA).evaluate_rule(
+            _xds_rule(metric="sum", column="amount", reference_column="total")
+        )
+        assert db.calls[1][3] == "total"
+
+    def test_decimal_precision_no_float_rounding(self) -> None:
+        """100.00000000000000001 vs 100 at tolerance 0 must FAIL — a float
+        comparison would round the difference away and silently pass."""
+        db = _AggAdapter(
+            {
+                (SCHEMA, TABLE): Decimal("100.00000000000000001"),
+                ("staging", "records"): Decimal("100"),
+            }
+        )
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(
+            _xds_rule(tolerance_pct="0")
+        )
+        assert not result.passed
+
+    def test_self_comparison_warns_but_evaluates(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        db = _AggAdapter({(SCHEMA, TABLE): 100})
+        rule = _xds_rule(reference_dataset=DATASET)
+        with caplog.at_level(logging.WARNING):
+            result = RuleEngine(db, schema=SCHEMA).evaluate_rule(rule)
+        assert result.passed  # same table trivially equal
+        assert any("compares a dataset to itself" in r.message for r in caplog.records)
+
+    def test_bare_reference_dataset_uses_engine_schema(self) -> None:
+        db = _AggAdapter({(SCHEMA, TABLE): 10, (SCHEMA, "staging_records"): 10})
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(
+            _xds_rule(reference_dataset="staging_records")
+        )
+        assert result.passed
+        assert db.calls[1][0] == SCHEMA
+
+
+class TestCrossDatasetEndToEnd:
+    """Engine + real InMemoryAdapter, no fakes."""
+
+    def test_row_count_drift_beyond_tolerance_fails(self) -> None:
+        db = InMemoryAdapter()
+        db.add_table(SCHEMA, "fact", [{"id": str(i)} for i in range(90)])
+        db.add_table(SCHEMA, "staging", [{"id": str(i)} for i in range(100)])
+        rule = _make_rule(
+            rule_id="xds-e2e",
+            check="cross_dataset_assertion",
+            column=None,
+            params=CrossDatasetParams(
+                metric="row_count",
+                reference_dataset=f"{SCHEMA}.staging",
+                tolerance_pct="2",
+            ),
+        )
+        rule = Rule(**{**rule.__dict__, "dataset": f"{SCHEMA}.fact"})
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(rule)
+        assert not result.passed
+        assert result.violation_count == 1
+
+    def test_sum_within_tolerance_passes(self) -> None:
+        db = InMemoryAdapter()
+        db.add_table(SCHEMA, "fact", [{"amt": "10"}, {"amt": "20"}])
+        db.add_table(SCHEMA, "staging", [{"amt": "30"}])
+        rule = _make_rule(
+            rule_id="xds-e2e-sum",
+            check="cross_dataset_assertion",
+            column="amt",
+            params=CrossDatasetParams(
+                metric="sum",
+                reference_dataset=f"{SCHEMA}.staging",
+                tolerance_pct="0",
+            ),
+        )
+        rule = Rule(**{**rule.__dict__, "dataset": f"{SCHEMA}.fact"})
+        result = RuleEngine(db, schema=SCHEMA).evaluate_rule(rule)
+        assert result.passed

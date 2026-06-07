@@ -71,6 +71,29 @@ class ReferenceLookupParams:
     reference_schema: str | None = None
 
 
+@dataclass(frozen=True)
+class CrossDatasetParams:
+    """Parameters for cross_dataset_assertion (AgDR-0008).
+
+    Compares one aggregate between the rule's dataset and
+    ``reference_dataset`` (``table`` or ``schema.table``, same database).
+
+    ``metric`` is whitelisted at load time — v1 ships ``row_count`` and
+    ``sum`` only (``count_distinct`` deliberately deferred: hash-aggregate
+    spill at high cardinality). For ``sum`` the target column is the
+    rule's own ``column``; ``reference_column`` defaults to it.
+
+    ``tolerance_pct`` is kept as the YAML string and parsed as a
+    non-negative ``Decimal`` percentage — float would lose precision
+    against ``numeric`` sums.
+    """
+
+    metric: str
+    reference_dataset: str
+    reference_column: str | None = None
+    tolerance_pct: str = "0"
+
+
 CheckParams = (
     NotNullParams
     | UniqueParams
@@ -82,4 +105,5 @@ CheckParams = (
     | RowCountParams
     | NotNegativeParams
     | ReferenceLookupParams  # new in v0.3.0
+    | CrossDatasetParams  # new in v0.6.0
 )

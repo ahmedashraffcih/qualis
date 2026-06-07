@@ -6,6 +6,8 @@ import duckdb
 
 from qualis.adapters._condition_sql import render_sql_condition
 from qualis.adapters.duckdb.sql_templates import (
+    AGGREGATE_ROW_COUNT_SQL,
+    AGGREGATE_SUM_SQL,
     BETWEEN_SQL,
     IN_SET_SQL,
     NOT_NEGATIVE_SQL,
@@ -220,6 +222,34 @@ class DuckDBAdapter:
         row = self._con.execute(sql).fetchone()
         count = int(row[0]) if row else 0
         return {"row_count": count}
+
+    def check_aggregate(
+        self,
+        schema: str,
+        table: str,
+        metric: str,
+        column: str | None = None,
+        condition: ConditionExpr | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate capability for cross_dataset_assertion (AgDR-0008).
+
+        The metric maps to a FIXED template — the metric name itself is
+        never formatted into SQL (loader whitelist + this map are the two
+        layers of the trust boundary).
+        """
+        if metric == "row_count":
+            sql = AGGREGATE_ROW_COUNT_SQL.format(table=_qualified(schema, table))
+        elif metric == "sum":
+            if not column:
+                raise ValueError("check_aggregate: metric 'sum' requires a column")
+            sql = AGGREGATE_SUM_SQL.format(
+                table=_qualified(schema, table), column=column
+            )
+        else:
+            raise ValueError(f"check_aggregate: unsupported metric {metric!r}")
+        sql += self._where(condition)
+        row = self._con.execute(sql).fetchone()
+        return {"value": row[0] if row else None}
 
     def check_not_negative(
         self,

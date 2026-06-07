@@ -365,3 +365,132 @@ class TestReferenceJoinIdentifierValidation:
             },
         })
         assert rule.params.reference_schema == ""
+
+
+class TestCrossDatasetAssertionLoading:
+    """Load-time trust boundary for cross_dataset_assertion (AgDR-0008)."""
+
+    @staticmethod
+    def _yaml(
+        *,
+        metric: str = "row_count",
+        reference_dataset: str = "staging.orders",
+        extra_params: str = "",
+        column_line: str = "",
+    ) -> str:
+        return (
+            "rules:\n"
+            "  - id: xds-1\n"
+            "    name: fact vs staging\n"
+            "    dimension: consistency\n"
+            "    severity: critical\n"
+            "    dataset: marts.orders\n"
+            f"{column_line}"
+            "    check: cross_dataset_assertion\n"
+            "    parameters:\n"
+            f"      metric: {metric}\n"
+            f"      reference_dataset: {reference_dataset}\n"
+            f"{extra_params}"
+        )
+
+    def test_loads_valid_row_count_rule(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(
+            self._yaml(extra_params="      tolerance_pct: '2'\n"), encoding="utf-8"
+        )
+        from qualis.domain.params import CrossDatasetParams
+
+        (rule,) = load_rules_from_file(p)
+        assert isinstance(rule.params, CrossDatasetParams)
+        assert rule.params.metric == "row_count"
+        assert rule.params.tolerance_pct == "2"
+
+    def test_metric_whitelist_rejects_count_distinct(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(self._yaml(metric="count_distinct"), encoding="utf-8")
+        with pytest.raises(ValueError, match="count_distinct"):
+            load_rules_from_file(p)
+
+    def test_metric_whitelist_rejects_injection(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(
+            self._yaml(metric="'row_count; DROP TABLE x--'"), encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="metric"):
+            load_rules_from_file(p)
+
+    def test_reference_dataset_identifier_validation(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(
+            self._yaml(reference_dataset="'staging.\"orders\"; --'"),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="identifier"):
+            load_rules_from_file(p)
+
+    def test_reference_dataset_too_many_parts_rejected(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(self._yaml(reference_dataset="db.staging.orders"), encoding="utf-8")
+        with pytest.raises(ValueError, match=r"identifier|parts"):
+            load_rules_from_file(p)
+
+    def test_sum_requires_rule_column(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(self._yaml(metric="sum"), encoding="utf-8")
+        with pytest.raises(ValueError, match="column"):
+            load_rules_from_file(p)
+
+    def test_sum_with_column_loads(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(
+            self._yaml(metric="sum", column_line="    column: amount\n"),
+            encoding="utf-8",
+        )
+        (rule,) = load_rules_from_file(p)
+        assert rule.column == "amount"
+
+    def test_reference_column_identifier_validation(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(
+            self._yaml(
+                metric="sum",
+                column_line="    column: amount\n",
+                extra_params="      reference_column: '\"amt\"; --'\n",
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="identifier"):
+            load_rules_from_file(p)
+
+    def test_negative_tolerance_rejected(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(
+            self._yaml(extra_params="      tolerance_pct: '-1'\n"), encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="tolerance"):
+            load_rules_from_file(p)
+
+    def test_non_numeric_tolerance_rejected(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(
+            self._yaml(extra_params="      tolerance_pct: 'lots'\n"), encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="tolerance"):
+            load_rules_from_file(p)
+
+    def test_missing_reference_dataset_rejected(self, tmp_path: Path) -> None:
+        p = tmp_path / "xds.yaml"
+        p.write_text(
+            "rules:\n"
+            "  - id: xds-1\n"
+            "    name: incomplete\n"
+            "    dimension: consistency\n"
+            "    severity: critical\n"
+            "    dataset: marts.orders\n"
+            "    check: cross_dataset_assertion\n"
+            "    parameters:\n"
+            "      metric: row_count\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="reference_dataset"):
+            load_rules_from_file(p)

@@ -48,6 +48,7 @@ class CheckType(StrEnum):
     ROW_COUNT = "row_count"
     NOT_NEGATIVE = "not_negative"
     REFERENCE_LOOKUP = "reference_lookup"
+    CROSS_DATASET_ASSERTION = "cross_dataset_assertion"
 
 
 class RuleStatus(StrEnum):
