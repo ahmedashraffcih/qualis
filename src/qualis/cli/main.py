@@ -13,7 +13,8 @@ from rich.console import Console
 
 from qualis import __version__
 from qualis.adapters.console import print_diff, print_score
-from qualis.bootstrap import create_checker
+from qualis.adapters.notifiers import dispatch_notifications
+from qualis.bootstrap import build_notifiers, create_checker
 from qualis.config.loader import load_rules_from_path
 from qualis.config.settings import QualisSettings
 from qualis.domain.params import CustomParams
@@ -257,6 +258,16 @@ def check(
         help="Output format: 'table' (rich terminal) or 'json'.",
         case_sensitive=False,
     ),
+    notify: bool = typer.Option(
+        False,
+        "--notify",
+        help=(
+            "Send a score summary to the configured notifier endpoints "
+            "(QUALIS_SLACK_WEBHOOK_URL / QUALIS_WEBHOOK_URL env vars). "
+            "Explicit opt-in: never fires without this flag, never on "
+            "dry-run. A notifier failure is logged and never fails the run."
+        ),
+    ),
 ) -> None:
     """Run data quality checks against a sample CSV or Parquet file.
 
@@ -305,6 +316,22 @@ def check(
         sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
     else:
         print_score(score)
+
+    # Notification runs BEFORE the fail-on-score exit on purpose — alerting
+    # on a failing score is the primary use case. Explicit --notify gate;
+    # dry-run never notifies; failures are isolated inside the dispatcher.
+    if notify:
+        if settings.dry_run:
+            console.print("[dim]dry-run: notifications skipped.[/]")
+        else:
+            notifiers = build_notifiers(settings)
+            if not notifiers:
+                console.print(
+                    "[yellow]--notify set but no notifier endpoints configured[/] "
+                    "(set QUALIS_SLACK_WEBHOOK_URL and/or QUALIS_WEBHOOK_URL)."
+                )
+            else:
+                dispatch_notifications(notifiers, score)
 
     score_pct = int(score.aggregate_score * 100)
     if fail_on_score > 0 and score_pct < fail_on_score:

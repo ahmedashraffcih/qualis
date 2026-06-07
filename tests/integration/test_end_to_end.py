@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from typer.testing import CliRunner
 
 from qualis.cli.main import app
+
+if TYPE_CHECKING:
+    import pytest
 
 runner = CliRunner()
 EXAMPLE = Path(__file__).parent.parent.parent / "examples" / "traffic_safety"
@@ -419,3 +423,89 @@ def test_review_pending_empty_when_no_pending_rules(tmp_path: Path) -> None:
     result = runner.invoke(app, ["review", "--pending", "--rules", str(rules_file)])
     assert result.exit_code == 0
     assert "0 pending" in result.output.lower() or "no pending" in result.output.lower()
+
+
+class TestCheckNotify:
+    """--notify wiring: explicit gate, dry-run skip, failure isolation."""
+
+    def _invoke_check(self, *extra: str) -> object:
+        return runner.invoke(app, [
+            "check",
+            "--rules", str(EXAMPLE / "rules"),
+            "--sample", str(EXAMPLE / "data" / "accidents.csv"),
+            *extra,
+        ])
+
+    def test_notify_posts_to_configured_webhook(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+
+        class _FakeResponse:
+            status = 200
+
+            def __enter__(self) -> object:
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+        def fake_urlopen(req: object, timeout: float | None = None) -> _FakeResponse:
+            calls.append(req.full_url)  # type: ignore[attr-defined]
+            return _FakeResponse()
+
+        monkeypatch.setenv("QUALIS_WEBHOOK_URL", "https://example.com/hook")
+        monkeypatch.setattr(
+            "qualis.adapters.notifiers.webhook.urlopen", fake_urlopen
+        )
+        result = self._invoke_check("--notify")
+        assert result.exit_code == 0  # type: ignore[attr-defined]
+        assert calls == ["https://example.com/hook"]
+
+    def test_notify_without_configured_endpoints_warns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QUALIS_WEBHOOK_URL", raising=False)
+        monkeypatch.delenv("QUALIS_SLACK_WEBHOOK_URL", raising=False)
+        result = self._invoke_check("--notify")
+        assert result.exit_code == 0  # type: ignore[attr-defined]
+        assert "no notifier" in result.output.lower()  # type: ignore[attr-defined]
+
+    def test_notify_skipped_on_dry_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        called: list[str] = []
+        monkeypatch.setenv("QUALIS_WEBHOOK_URL", "https://example.com/hook")
+        monkeypatch.setenv("QUALIS_DRY_RUN", "true")
+        monkeypatch.setattr(
+            "qualis.adapters.notifiers.webhook.urlopen",
+            lambda *a, **k: called.append("hit"),
+        )
+        result = self._invoke_check("--notify")
+        assert result.exit_code == 0  # type: ignore[attr-defined]
+        assert called == []
+        assert "dry-run" in result.output.lower()  # type: ignore[attr-defined]
+
+    def test_notifier_failure_does_not_fail_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(*a: object, **k: object) -> None:
+            raise ConnectionError("endpoint down")
+
+        monkeypatch.setenv("QUALIS_WEBHOOK_URL", "https://example.com/hook")
+        monkeypatch.setattr("qualis.adapters.notifiers.webhook.urlopen", boom)
+        result = self._invoke_check("--notify")
+        assert result.exit_code == 0  # type: ignore[attr-defined]
+
+    def test_no_notify_flag_means_no_post(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        called: list[str] = []
+        monkeypatch.setenv("QUALIS_WEBHOOK_URL", "https://example.com/hook")
+        monkeypatch.setattr(
+            "qualis.adapters.notifiers.webhook.urlopen",
+            lambda *a, **k: called.append("hit"),
+        )
+        result = self._invoke_check()
+        assert result.exit_code == 0  # type: ignore[attr-defined]
+        assert called == []

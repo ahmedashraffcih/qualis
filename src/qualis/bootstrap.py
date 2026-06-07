@@ -116,3 +116,23 @@ def create_checker(
         redact=settings.redact_actual_value,
         sample_rows=sample_rows,
     )
+
+
+def build_notifiers(settings: QualisSettings) -> list[Any]:
+    """Construct the notifiers whose endpoints are configured.
+
+    Endpoints arrive ONLY via env-backed ``SecretStr`` settings
+    (``QUALIS_SLACK_WEBHOOK_URL`` / ``QUALIS_WEBHOOK_URL``) — see
+    AgDR-0007. Empty string = not configured = skipped. The returned
+    list feeds ``dispatch_notifications``, never direct calls.
+    """
+    from qualis.adapters.notifiers import SlackWebhookNotifier, WebhookNotifier
+
+    notifiers: list[Any] = []
+    slack_url = settings.slack_webhook_url.get_secret_value()
+    if slack_url:
+        notifiers.append(SlackWebhookNotifier(slack_url))
+    generic_url = settings.webhook_url.get_secret_value()
+    if generic_url:
+        notifiers.append(WebhookNotifier(generic_url))
+    return notifiers
