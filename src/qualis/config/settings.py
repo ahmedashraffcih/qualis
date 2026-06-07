@@ -26,3 +26,10 @@ class QualisSettings(BaseSettings):
     # Applied by adapters that support it (Postgres via SET LOCAL); DuckDB
     # has no per-statement timeout and ignores this. None = server default.
     statement_timeout_ms: int | None = None
+    # Notifier endpoints (qualis#20, AgDR-0007). SecretStr + env-only on
+    # purpose: webhook URLs embed tokens, and an env var is the ONLY
+    # supported configuration surface — there is no YAML field for these,
+    # so a literal secret cannot end up committed in a rules file.
+    # Empty string = notifier not configured.
+    slack_webhook_url: SecretStr = SecretStr("")
+    webhook_url: SecretStr = SecretStr("")

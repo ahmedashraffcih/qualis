@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- **Notifications** — `qualis check --notify` sends a bounded score
+  summary to Slack (`QUALIS_SLACK_WEBHOOK_URL`) and/or a generic JSON
+  webhook (`QUALIS_WEBHOOK_URL`). First `NotifierPort` implementations;
+  stdlib HTTP, zero new dependencies. Endpoints are env-var-only by
+  design (no YAML surface for secrets); a notifier failure is logged
+  and never fails the check run; dry-run never notifies; 10s hard
+  timeout, single attempt. See AgDR-0007. (#20)
 - **Provenance context** — `context.yaml` accepts an optional
   `provenance: {model_id, checkpoint}` block recording which model
   produced a machine-generated dataset, so drift findings can be

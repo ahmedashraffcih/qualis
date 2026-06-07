@@ -78,8 +78,31 @@ qualis check                     Run checks and print a score report
   --fail-on-score N              Exit 1 when score < N (0-100)
   --allow-custom                 Allow custom check type
   --output-format table|json     Output format (default: table)
+  --notify                       Send a score summary to configured
+                                 notifiers (see Notifications)
 qualis version                   Print version
 ```
+
+---
+
+## Notifications
+
+`qualis check --notify` pushes a bounded score summary (score, violation
+counts, worst dimensions — never row-level data) to Slack and/or a generic
+JSON webhook:
+
+```bash
+export QUALIS_SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
+export QUALIS_WEBHOOK_URL="https://alerts.example.com/qualis"   # optional second sink
+qualis check --rules rules/ --sample data.csv --notify
+```
+
+Endpoints are configured **only** through environment variables — webhook
+URLs embed tokens, and there is deliberately no YAML field for them, so a
+secret can never end up committed in a rules file. A notifier failure
+(timeout, DNS, 500) is logged as a warning and never fails the check run;
+notifications are skipped entirely under `QUALIS_DRY_RUN`. Single attempt,
+10s hard timeout, no retries.
 
 ---
 
