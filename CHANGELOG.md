@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- **`qualis ui` (preview)** — the first slice of a local browser UI for the
+  full data-quality journey. PR-1 ships the FastAPI server skeleton + landing
+  screen behind an optional `qualis[ui]` extra; the server binds `127.0.0.1`
+  only, auto-scans for a free port (default 7420), and the base install stays
+  FastAPI-free (a regression test enforces it). Upload/profile/review/score
+  land in following increments. See AgDR-0009. (#27)
 - **`cross_dataset_assertion` check kind** — compare an aggregate
   (`row_count` or `sum`) between the rule's dataset and a reference
   dataset within a Decimal tolerance, e.g. "fact row count within 2%
