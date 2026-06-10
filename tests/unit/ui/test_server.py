@@ -36,18 +36,16 @@ class TestApp:
 
     def test_autoescape_enabled(self) -> None:
         """The XSS defense for untrusted CSV content (lands fully in PR-3)
-        depends on Jinja2 autoescape being on. Lock it here."""
+        depends on the SERVER's Jinja2 env autoescaping. Render a hostile
+        string through the real env (app.state.templates), not a probe."""
         from qualis.ui.server import create_app
 
         app = create_app()
-        # The Jinja2Templates env is created inside create_app; assert the
-        # template response escapes a hostile string via a probe template.
-        from jinja2 import Environment, select_autoescape
-
-        env = Environment(autoescape=select_autoescape(["html"]))
+        env = app.state.templates.env
+        assert env.autoescape is True
         rendered = env.from_string("{{ v }}").render(v="<img src=x onerror=alert(1)>")
         assert "&lt;img" in rendered
-        assert app is not None
+        assert "<img" not in rendered
 
 
 class TestPortStrategy:

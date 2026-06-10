@@ -47,6 +47,9 @@ def create_app() -> FastAPI:
     # Lock autoescape on: a future template-config change must not silently
     # disable the XSS escaping that untrusted CSV content relies on (PR-3).
     templates.env.autoescape = True
+    # Expose the templates env on app.state so later routes share one
+    # instance and tests can assert the REAL env escapes (not a probe).
+    app.state.templates = templates
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
