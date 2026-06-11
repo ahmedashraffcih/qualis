@@ -5,9 +5,37 @@
   --muted: #9aa3b2;
   --accent: #4fd1c5;
   --border: #262a33;
+
+  /* Type scale — named so later screens reuse these instead of fresh
+     literals (PR-2..5 baseline; UI design review on #32). */
+  --text-xl: 2.75rem;   /* h1 */
+  --text-lg: 1.15rem;   /* tagline */
+  --text-base: 1rem;
+  --text-sm: 0.95rem;   /* secondary notes */
+  --text-xs: 0.85rem;   /* footer, labels */
 }
 
 * { box-sizing: border-box; }
+
+/* Accent-coloured focus ring — pre-wired here so every interactive
+   control added in later screens (upload form, review buttons) gets a
+   consistent, visible keyboard-focus signal. No-op on this screen (no
+   interactive elements yet). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* Placeholder: any transition/animation added in later screens must be
+   suppressed here for vestibular-sensitivity (WCAG 2.3.3). */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 body {
   margin: 0;
@@ -24,18 +52,18 @@ body {
 }
 
 .hero h1 {
-  font-size: 2.75rem;
+  font-size: var(--text-xl);
   margin: 0;
   letter-spacing: -0.02em;
 }
 
 .tagline {
   color: var(--muted);
-  font-size: 1.15rem;
+  font-size: var(--text-lg);
   margin: 0.5rem 0 0;
 }
 
-.tagline em { color: var(--accent); font-style: normal; }
+.tagline .hi { color: var(--accent); }
 
 .journey {
   margin-top: 2.5rem;
@@ -61,13 +89,13 @@ body {
   padding-top: 1.25rem;
   border-top: 1px solid var(--border);
   color: var(--muted);
-  font-size: 0.95rem;
+  font-size: var(--text-sm);
 }
 
 .foot {
   margin-top: 2rem;
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: var(--text-xs);
 }
 
 .foot code {
