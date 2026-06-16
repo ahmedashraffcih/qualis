@@ -699,3 +699,10 @@ from qualis.cli.drift_cmd import snapshot as _snapshot_cmd  # noqa: E402
 
 app.command(name="snapshot")(_snapshot_cmd)
 app.command(name="drift")(_drift_cmd)
+
+# Local browser UI — optional `qualis[ui]` extra; ui_cmd lazy-imports the
+# FastAPI/uvicorn deps inside the handler (importing ui_cmd itself only
+# pulls qualis.ui.server's stdlib-level constants, not FastAPI).
+from qualis.cli.ui_cmd import ui as _ui_cmd  # noqa: E402
+
+app.command(name="ui")(_ui_cmd)

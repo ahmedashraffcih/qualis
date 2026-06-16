@@ -44,6 +44,10 @@ dependencies = [
 [project.optional-dependencies]
 sqlalchemy = ["sqlalchemy>=2.0,<3"]
 postgres = ["psycopg[binary]>=3.1", "psycopg-pool>=3.1"]
+# Local browser UI (qualis#27, AgDR-0009). Kept out of the base install so
+# CI-only `qualis check` users don't pay for FastAPI/uvicorn. python-multipart
+# is needed for the CSV upload route landing in PR-2.
+ui = ["fastapi>=0.110", "uvicorn>=0.27", "python-multipart>=0.0.9"]
 
 [project.scripts]
 qualis = "qualis.cli.main:app"
@@ -107,6 +111,12 @@ dev = [
     "pytest-cov>=7.1.0",
     "ruff>=0.15.14",
     "types-pyyaml>=6.0.12.20260518",
+    # UI deps + httpx so the test suite can drive the FastAPI app via
+    # Starlette's TestClient even when the `ui` extra isn't separately installed.
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
 ]
 
 [project.entry-points."qualis.adapters"]
